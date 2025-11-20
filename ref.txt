@@ -1,0 +1,27 @@
+When editing the TUNING CONFIGURATION SECTION in main:
+
+Threadblock Shape (ShapeTB):
+
+Larger tiles (e.g., 256x128 or 128x256) generally improve data reuse but reduce occupancy (fewer blocks per SM).
+
+Rule of thumb: Try <128, 128, 32> first. Then try <128, 256, 64> if you have large K.
+
+Ensure ThreadblockShape dimensions are multiples of WarpShape.
+
+Warp Shape (ShapeWarp):
+
+Standard is <64, 64, 32>.
+
+Changing this usually has less impact than changing the TB shape, provided it covers the TB shape evenly.
+
+Pipeline Stages:
+
+Hopper has high async copy bandwidth.
+
+Try 3, 4, or 5. Higher stages hide global memory latency better but consume more Shared Memory, potentially reducing occupancy.
+
+K-Dimension:
+
+The "K" part of the tile (e.g., the 32 in <128, 128, 32>) determines the "step" size of the main loop.
+
+Larger K (e.g., 64) improves inner loop efficiency but increases register pressure.

@@ -8,143 +8,162 @@
 #include "cutlass/numeric_types.h"
 #include "cutlass/gemm/device/gemm.h"
 
-#define CHECK_CUDA(func) { \
-    cudaError_t status = (func); \
-    if (status != cudaSuccess) { \
-        std::cerr << "CUDA Error: " << cudaGetErrorString(status) << " at line " << __LINE__ << std::endl; \
-        exit(EXIT_FAILURE); \
-    } \
-}
-
-#define CHECK_CUTLASS(status) { \
-    if ((status) != cutlass::Status::kSuccess) { \
-        std::cerr << "CUTLASS Error at line " << __LINE__ << std::endl; \
-        exit(EXIT_FAILURE); \
-    } \
-}
-
-// --- Tuning Template ---
-// Allows passing shapes as template arguments
+// =============================================================================
+// 1. The Core GEMM Kernel (Templated)
+// =============================================================================
 template <
-    typename ElementType, 
-    typename ThreadblockShape, 
-    typename WarpShape, 
-    typename InstructionShape, 
+    typename ShapeTB, 
+    typename ShapeWarp, 
     int Stages
 >
-void run_tuned_gemm(int m, int n, int k) {
+void run_gemm_core(int m, int n, int k) {
     
+    // Fixed Types for SM90/Blackwell BF16
+    using ElementType = cutlass::bfloat16_t;
     using Layout = cutlass::layout::RowMajor;
     using ElementAccumulator = float;
+    using ShapeOp = cutlass::gemm::GemmShape<16, 8, 16>; // Fixed for Tensor Cores
 
-    // Define the Tuned Gemm Operator
     using Gemm = cutlass::gemm::device::Gemm<
         ElementType, Layout,
         ElementType, Layout,
         ElementType, Layout,
         ElementAccumulator,
-        cutlass::arch::OpClassTensorOp, // Use Tensor Cores
-        cutlass::arch::Sm80,            // Target Architecture (Sm90 is backward compat with Sm80 API)
-        ThreadblockShape,               // Tunable: Threadblock Size
-        WarpShape,                      // Tunable: Warp Size
-        InstructionShape,               // Tunable: Instruction Size
+        cutlass::arch::OpClassTensorOp,
+        cutlass::arch::Sm80,
+        ShapeTB,
+        ShapeWarp,
+        ShapeOp,
         cutlass::epilogue::thread::LinearCombination<
-            ElementType, 
-            128 / cutlass::sizeof_bits<ElementType>::value,
-            ElementAccumulator, 
-            ElementAccumulator
+            ElementType, 128 / cutlass::sizeof_bits<ElementType>::value,
+            ElementAccumulator, ElementAccumulator
         >,
         cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
-        Stages                          // Tunable: Pipeline Stages
+        Stages
     >;
 
-    std::cout << "Running Tuned GEMM (M=" << m << ", N=" << n << ", K=" << k << ")..." << std::endl;
-    std::cout << "Config: " 
-              << "TB<" << ThreadblockShape::kM << "," << ThreadblockShape::kN << "," << ThreadblockShape::kK << "> "
-              << "Warp<" << WarpShape::kM << "," << WarpShape::kN << "," << WarpShape::kK << "> "
-              << "Stages=" << Stages 
-              << std::endl;
-
-    // Allocations
+    // --- Setup & Run ---
     ElementType *dev_A, *dev_B, *dev_C;
     size_t size_A = size_t(m) * k * sizeof(ElementType);
     size_t size_B = size_t(k) * n * sizeof(ElementType);
     size_t size_C = size_t(m) * n * sizeof(ElementType);
 
-    CHECK_CUDA(cudaMalloc(&dev_A, size_A));
-    CHECK_CUDA(cudaMalloc(&dev_B, size_B));
-    CHECK_CUDA(cudaMalloc(&dev_C, size_C));
+    cudaMalloc(&dev_A, size_A);
+    cudaMalloc(&dev_B, size_B);
+    cudaMalloc(&dev_C, size_C);
 
-    // Args
-    ElementAccumulator alpha = 1.0f;
-    ElementAccumulator beta  = 1.0f;
-    typename Gemm::Arguments arguments({m, n, k}, {dev_A, k}, {dev_B, n}, {dev_C, n}, {dev_C, n}, {alpha, beta});
+    typename Gemm::Arguments arguments(
+        {m, n, k}, {dev_A, k}, {dev_B, n}, {dev_C, n}, {dev_C, n}, {1.0f, 1.0f}
+    );
 
     Gemm gemm_op;
-    size_t workspace_size = Gemm::get_workspace_size(arguments);
-    void *workspace = nullptr;
-    if (workspace_size > 0) CHECK_CUDA(cudaMalloc(&workspace, workspace_size));
+    size_t ws_size = Gemm::get_workspace_size(arguments);
+    void *ws = nullptr;
+    if (ws_size > 0) cudaMalloc(&ws, ws_size);
 
-    CHECK_CUTLASS(gemm_op.initialize(arguments, workspace));
+    if(gemm_op.initialize(arguments, ws) != cutlass::Status::kSuccess) {
+        std::cerr << "Failed to initialize CUTLASS kernel." << std::endl;
+        exit(1);
+    }
 
     // Profile
-    const int warmup = 10;
-    const int iter = 100;
-
-    for(int i=0; i<warmup; ++i) gemm_op(arguments, workspace);
-    CHECK_CUDA(cudaDeviceSynchronize());
-
     cudaEvent_t start, stop;
     cudaEventCreate(&start); cudaEventCreate(&stop);
+
+    // Warmup
+    for(int i=0; i<10; ++i) gemm_op(arguments, ws);
+    cudaDeviceSynchronize();
+
     cudaEventRecord(start);
-    for(int i=0; i<iter; ++i) gemm_op(arguments, workspace);
+    for(int i=0; i<100; ++i) gemm_op(arguments, ws);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
     float ms = 0;
     cudaEventElapsedTime(&ms, start, stop);
-    double avg_sec = (ms / 1000.0) / iter;
-    double tflops = (2.0 * double(m) * double(n) * double(k)) / avg_sec / 1.0e12;
+    double tflops = (2.0 * m * n * k) / ((ms/100.0) / 1000.0) / 1e12;
 
-    std::cout << "Time: " << std::fixed << std::setprecision(3) << ms/iter << " ms | ";
-    std::cout << "Perf: " << tflops << " TFLOPs" << std::endl;
+    std::cout << "  [Config] TB: <" << ShapeTB::kM << "," << ShapeTB::kN << "," << ShapeTB::kK << ">"
+              << " Warp: <" << ShapeWarp::kM << "," << ShapeWarp::kN << "," << ShapeWarp::kK << ">"
+              << " Stages: " << Stages << "\n"
+              << "  [Result] Time: " << std::fixed << std::setprecision(3) << ms/100.0 << " ms | "
+              << "TFLOPs: " << tflops << std::endl;
 
-    cudaFree(dev_A); cudaFree(dev_B); cudaFree(dev_C);
-    if(workspace) cudaFree(workspace);
+    cudaFree(dev_A); cudaFree(dev_B); cudaFree(dev_C); 
+    if(ws) cudaFree(ws);
+}
+
+// =============================================================================
+// 2. Dispatch Logic (The Magic)
+// =============================================================================
+
+// Macro to reduce boilerplate code
+// If user inputs match the macro arguments, instantiate that specific template
+#define DISPATCH_GEMM(TB_M, TB_N, TB_K, W_M, W_N, W_K, STAGES) \
+    if (tb_m == TB_M && tb_n == TB_N && tb_k == TB_K && \
+        w_m == W_M && w_n == W_N && w_k == W_K && stages == STAGES) { \
+        run_gemm_core< \
+            cutlass::gemm::GemmShape<TB_M, TB_N, TB_K>, \
+            cutlass::gemm::GemmShape<W_M, W_N, W_K>, \
+            STAGES \
+        >(m, n, k); \
+        return; \
+    }
+
+void dispatch(int m, int n, int k, 
+              int tb_m, int tb_n, int tb_k, 
+              int w_m, int w_n, int w_k, 
+              int stages) {
+
+    // --- List of Valid Configurations to Compile ---
+    // You must manually list every combination you want to support.
+    // The compiler will generate code for ALL of these.
+    
+    // Shape Set 1: 128x256x32
+    DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  3);
+    DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  4);
+    DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  5);
+
+    // Shape Set 2: 256x128x32
+    DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  3);
+    DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  4);
+    DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  5);
+
+    // Shape Set 3: 128x128x32 (Smaller tile)
+    DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  3);
+    DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  4);
+    DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  5);
+
+    // If we get here, the user asked for a config we didn't pre-compile
+    std::cerr << "Error: Configuration not supported (was not pre-compiled)." << std::endl;
+    std::cerr << "Requested TB: <" << tb_m << "," << tb_n << "," << tb_k << ">" << std::endl;
+    std::cerr << "Supported TBs: <128,256,32>, <256,128,32>, <128,128,32>" << std::endl;
 }
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <M> <N> <K>" << std::endl;
+    if (argc != 11) {
+        std::cerr << "Usage: " << argv[0] << " <M> <N> <K> <TB_M> <TB_N> <TB_K> <W_M> <W_N> <W_K> <Stages>" << std::endl;
+        std::cerr << "Example: " << argv[0] << " 4096 4096 4096 128 256 32 64 64 32 4" << std::endl;
         return -1;
     }
+
+    // Parse User Input
     int m = std::atoi(argv[1]);
     int n = std::atoi(argv[2]);
     int k = std::atoi(argv[3]);
 
-    // ============================================================================
-    // TUNING CONFIGURATION SECTION
-    // Change these parameters to tune performance for SM90
-    // ============================================================================
-    
-    // 1. Threadblock Shape: <M, N, K>
-    //    Recommended for SM80/90: <128, 256, 32> or <128, 128, 32> or <256, 128, 32>
-    using ShapeTB = cutlass::gemm::GemmShape<128, 128, 32>;
+    int tb_m = std::atoi(argv[4]);
+    int tb_n = std::atoi(argv[5]);
+    int tb_k = std::atoi(argv[6]);
 
-    // 2. Warp Shape: <M, N, K>
-    //    Standard: <64, 64, 32>
-    using ShapeWarp = cutlass::gemm::GemmShape<64, 64, 32>;
+    int w_m = std::atoi(argv[7]);
+    int w_n = std::atoi(argv[8]);
+    int w_k = std::atoi(argv[9]);
 
-    // 3. Instruction Shape: <M, N, K>
-    //    Hardcoded for Tensor Cores (bf16) usually <16, 8, 16>
-    using ShapeOp = cutlass::gemm::GemmShape<16, 8, 16>;
+    int stages = std::atoi(argv[10]);
 
-    // 4. Pipeline Stages
-    //    SM80/90 has large register files/shared mem. Try 3, 4, or 5.
-    const int Stages = 4;
-
-    // Run
-    run_tuned_gemm<cutlass::bfloat16_t, ShapeTB, ShapeWarp, ShapeOp, Stages>(m, n, k);
+    // Run Dispatcher
+    dispatch(m, n, k, tb_m, tb_n, tb_k, w_m, w_n, w_k, stages);
 
     return 0;
 }
