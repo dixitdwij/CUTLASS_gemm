@@ -2,12 +2,12 @@
 #include <vector>
 #include <string>
 #include <cstdlib>
+#include <iomanip>
 
 // CUTLASS Includes
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/device/gemm.h"
 
-// Error handling helper
 #define CHECK_CUDA(func) { \
     cudaError_t status = (func); \
     if (status != cudaSuccess) { \
@@ -23,89 +23,100 @@
     } \
 }
 
-// Templated function to handle different data types
 template <typename ElementType>
-void run_gemm(int m, int n, int k) {
-    // 1. Define the GEMM Setup
-    // RowMajor Layout is standard for C++ (M x K, K x N, M x N)
-    using LayoutInputA = cutlass::layout::RowMajor;
-    using LayoutInputB = cutlass::layout::RowMajor;
-    using LayoutOutput = cutlass::layout::RowMajor;
-
-    // Define the Gemm Operator
-    // <ElementA, LayoutA, ElementB, LayoutB, ElementOutput, LayoutOutput>
+void run_gemm_profile(int m, int n, int k) {
+    //  Configuration 
+    // Standard RowMajor Layout (M*K, K*N, M*N)
+    using Layout = cutlass::layout::RowMajor;
+    
+    // CUTLASS Device Gemm Operator
     using Gemm = cutlass::gemm::device::Gemm<
-        ElementType, LayoutInputA,
-        ElementType, LayoutInputB,
-        ElementType, LayoutOutput
+        ElementType, Layout,
+        ElementType, Layout,
+        ElementType, Layout
     >;
 
-    std::cout << "Running GEMM (M=" << m << ", N=" << n << ", K=" << k << ")..." << std::endl;
+    std::cout << "Initializing GEMM (M=" << m << ", N=" << n << ", K=" << k << ")..." << std::endl;
 
-    // 2. Allocate Host Memory
-    std::vector<ElementType> host_A(m * k);
-    std::vector<ElementType> host_B(k * n);
-    std::vector<ElementType> host_C(m * n);
-
-    // Initialize with arbitrary data (e.g., 1.0)
-    for(auto &v : host_A) v = static_cast<ElementType>(1.0f);
-    for(auto &v : host_B) v = static_cast<ElementType>(1.0f);
-    for(auto &v : host_C) v = static_cast<ElementType>(0.0f); // Start C at 0
-
-    // 3. Allocate Device Memory
+    //  Memory Allocation 
+    // Using arbitrary data for profiling purposes
     ElementType *dev_A, *dev_B, *dev_C;
-    CHECK_CUDA(cudaMalloc(&dev_A, m * k * sizeof(ElementType)));
-    CHECK_CUDA(cudaMalloc(&dev_B, k * n * sizeof(ElementType)));
-    CHECK_CUDA(cudaMalloc(&dev_C, m * n * sizeof(ElementType)));
+    CHECK_CUDA(cudaMalloc(&dev_A, size_t(m) * k * sizeof(ElementType)));
+    CHECK_CUDA(cudaMalloc(&dev_B, size_t(k) * n * sizeof(ElementType)));
+    CHECK_CUDA(cudaMalloc(&dev_C, size_t(m) * n * sizeof(ElementType)));
 
-    // 4. Copy Host to Device
-    CHECK_CUDA(cudaMemcpy(dev_A, host_A.data(), m * k * sizeof(ElementType), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(dev_B, host_B.data(), k * n * sizeof(ElementType), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(dev_C, host_C.data(), m * n * sizeof(ElementType), cudaMemcpyHostToDevice));
-
-    // 5. Setup Arguments
-    // Alpha = 1.0, Beta = 1.0 enforces C = (A * B) + C
+    //  Setup Arguments 
+    // alpha = 1, beta = 1 implements C += A * B
     ElementType alpha = static_cast<ElementType>(1.0f);
     ElementType beta  = static_cast<ElementType>(1.0f);
 
-    // Leading dimensions (stride between rows for RowMajor)
-    int lda = k;
-    int ldb = n;
-    int ldc = n;
-
     typename Gemm::Arguments arguments(
-        {m, n, k},  // Problem size
-        {dev_A, lda}, // Tensor A
-        {dev_B, ldb}, // Tensor B
-        {dev_C, ldc}, // Tensor C
-        {dev_C, ldc}, // Tensor D (Destination, usually same as C)
-        {alpha, beta} // Scalars
+        {m, n, k},      // Problem size
+        {dev_A, k},     // Tensor A (ptr, lda)
+        {dev_B, n},     // Tensor B (ptr, ldb)
+        {dev_C, n},     // Tensor C (ptr, ldc)
+        {dev_C, n},     // Tensor D (ptr, ldd) - same as C
+        {alpha, beta}   // Scalars
     );
 
-    // 6. Launch Kernel
     Gemm gemm_op;
     
-    // Query workspace size needs
+    // Workspace allocation (needed for some split-k kernels)
     size_t workspace_size = Gemm::get_workspace_size(arguments);
     void *workspace = nullptr;
-    if (workspace_size > 0) {
-        CHECK_CUDA(cudaMalloc(&workspace, workspace_size));
+    if (workspace_size > 0) CHECK_CUDA(cudaMalloc(&workspace, workspace_size));
+
+    CHECK_CUTLASS(gemm_op.initialize(arguments, workspace));
+
+    //  Profiling 
+    // Constants for profiling
+    const int warmup_iterations = 10;
+    const int profile_iterations = 100;
+
+    // Warmup
+    for(int i = 0; i < warmup_iterations; ++i) {
+        CHECK_CUTLASS(gemm_op(arguments, workspace));
+    }
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    // Create Events
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    // Record Start
+    cudaEventRecord(start);
+
+    // Run Loop
+    for(int i = 0; i < profile_iterations; ++i) {
+        CHECK_CUTLASS(gemm_op(arguments, workspace));
     }
 
-    // Initialize and Run
-    CHECK_CUTLASS(gemm_op.initialize(arguments, workspace));
-    CHECK_CUTLASS(gemm_op(arguments, workspace));
+    // Record Stop
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
 
-    // 7. Sync and cleanup
-    CHECK_CUDA(cudaDeviceSynchronize());
+    // Calculate Time
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
     
-    // (Optional) Copy back to check results
-    // CHECK_CUDA(cudaMemcpy(host_C.data(), dev_C, m * n * sizeof(ElementType), cudaMemcpyDeviceToHost));
+    double avg_time_sec = (milliseconds / 1000.0) / profile_iterations;
 
-    std::cout << "GEMM Completed Successfully." << std::endl;
+    //  TFLOPs Calculation 
+    // FLOPs = 2 * M * N * K (multiply + add)
+    double total_ops = 2.0 * double(m) * double(n) * double(k);
+    double tflops = (total_ops / avg_time_sec) / 1.0e12;
 
+    std::cout << "--" << std::endl;
+    std::cout << "Performance Results:" << std::endl;
+    std::cout << "Avg Time: " << std::fixed << std::setprecision(4) << avg_time_sec * 1000.0 << " ms" << std::endl;
+    std::cout << "Throughput: " << std::setprecision(2) << tflops << " TFLOPs" << std::endl;
+    std::cout << "--" << std::endl;
+
+    // Cleanup
     cudaFree(dev_A); cudaFree(dev_B); cudaFree(dev_C);
     if(workspace) cudaFree(workspace);
+    cudaEventDestroy(start); cudaEventDestroy(stop);
 }
 
 int main(int argc, char** argv) {
@@ -119,12 +130,12 @@ int main(int argc, char** argv) {
     int k = std::atoi(argv[3]);
     std::string type = argv[4];
 
-    if (type == "f32") {
-        run_gemm<float>(m, n, k);
-    } else if (type == "f16") {
-        run_gemm<cutlass::half_t>(m, n, k);
+    if (type == "fp32") {
+        run_gemm_profile<float>(m, n, k);
+    } else if (type == "fp16") {
+        run_gemm_profile<cutlass::half_t>(m, n, k);
     } else {
-        std::cerr << "Unsupported type. Use f32 or f16." << std::endl;
+        std::cerr << "Unsupported type. Use fp32 or fp16." << std::endl;
         return -1;
     }
 
