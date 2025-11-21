@@ -24,15 +24,38 @@ REQUIRED_MACROS
 
 #undef X
 
+enum struct DataType { FP32, FP16, BF16 };
+
+std::ostream& operator<<(std::ostream& os, DataType dtype) {
+    switch(dtype) {
+        case DataType::FP16: os << "fp16"; break;
+        case DataType::FP32: os << "fp32"; break;
+        case DataType::BF16: os << "bf16"; break;
+        default: os << "Unknown"; break;
+    }
+    return os;
+}
+
 // Configuration for benchmarking
 #define WARMUP_RUNS 10
 #define MEASURED_RUNS 100
 
 // 1. The Core GEMM Kernel (Templated)
 void run_gemm_core(int m, int n, int k) {
-    
-    // Fixed Types for SM90/Blackwell BF16
-    using ElementType = cutlass::bfloat16_t;
+
+    #if defined(FP_32)
+        using ElementType = float;
+        constexpr DataType dtype = DataType::FP32;
+    #elif defined(FP_16)
+        using ElementType = cutlass::half_t;
+        constexpr DataType dtype = DataType::FP16;
+    #elif defined(BF_16)
+        using ElementType = cutlass::bfloat16_t;
+        constexpr DataType dtype = DataType::BF16;
+    #else
+        static_assert(false, "DataType not defined. Define one of FP32, FP16, BF16 using -D during compilation.");
+    #endif
+
     using Layout = cutlass::layout::RowMajor;
     using ElementAccumulator = float;
     using ShapeOp = cutlass::gemm::GemmShape<16, 8, 16>; // Fixed for Tensor Cores
@@ -99,7 +122,7 @@ void run_gemm_core(int m, int n, int k) {
     double tflops = (2.0 * m * n * k) / ((ms/100.0) / 1000.0) / 1e12;
 
     std::cout << "==========================================\n";
-    std::cout << "DataType    : " << "BF16" << "\n";
+    std::cout << "DataType    : " << dtype << "\n";
     std::cout << "Runs        : " << WARMUP_RUNS << " warmup + " << MEASURED_RUNS << " measured\n";
     std::cout << "Matrix Size : " << m << " x " << n << " x " << k << "\n";
     std::cout << "  [Config] TB: <" << ShapeTB::kM << "," << ShapeTB::kN << "," << ShapeTB::kK << ">"

@@ -25,3 +25,11 @@ K-Dimension:
 The "K" part of the tile (e.g., the 32 in <128, 128, 32>) determines the "step" size of the main loop.
 
 Larger K (e.g., 64) improves inner loop efficiency but increases register pressure.
+
+For compile:
+srun -A dphpc --time=05:00 --nodelist=studgpu-node09 nvcc dyntuned_gemm.cu -o bin/dyntuned_gemm -I ./lib/cutlass/include/ -I ./lib/cutlass/tools/util/include/ --expt-relaxed-constexpr -arch=sm_90 -std=c++17 -DTB_M=128 -DTB_N=256 -DTB_K=32 -DW_M=64 -DW_N=64 -DW_K=32 -DSTAGES=2 -DFP_32
+
+For running:
+srun -A dphpc --time=01:00 --nodelist=studgpu-node09 ./bin/dyntuned_gemm 8192 8192 512
+
+git commit -m 'Added support for fp32, fp16, bf16 as compile time params'
