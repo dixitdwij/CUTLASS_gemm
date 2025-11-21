@@ -18,7 +18,7 @@
     X(W_K)  \
     X(STAGES)
 
-#define X(name) static const int _check_defined_##name = name;
+#define X(name) [[maybe_unused]] static const int _check_defined_##name = name;
 
 REQUIRED_MACROS
 
