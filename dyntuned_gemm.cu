@@ -16,6 +16,9 @@
     X(W_M)  \
     X(W_N)  \
     X(W_K)  \
+    X(INST_M) \
+    X(INST_N) \
+    X(INST_K) \
     X(STAGES)
 
 #define X(name) [[maybe_unused]] static const int _check_defined_##name = name;
@@ -41,7 +44,7 @@ std::ostream& operator<<(std::ostream& os, DataType dtype) {
 #define MEASURED_RUNS 100
 
 // 1. The Core GEMM Kernel (Templated)
-void run_gemm_core(int m, int n, int k) {
+double run_gemm_core(int m, int n, int k) {
 
     #if defined(FP_32)
         using ElementType = float;
@@ -58,7 +61,7 @@ void run_gemm_core(int m, int n, int k) {
 
     using Layout = cutlass::layout::RowMajor;
     using ElementAccumulator = float;
-    using ShapeOp = cutlass::gemm::GemmShape<16, 8, 16>; // Fixed for Tensor Cores
+    using ShapeOp = cutlass::gemm::GemmShape<INST_M, INST_N, INST_K>;
     using ShapeTB = cutlass::gemm::GemmShape<TB_M, TB_N, TB_K>;
     using ShapeWarp = cutlass::gemm::GemmShape<W_M, W_N, W_K>;
 
@@ -127,6 +130,7 @@ void run_gemm_core(int m, int n, int k) {
     std::cout << "Matrix Size : " << m << " x " << n << " x " << k << "\n";
     std::cout << "  [Config] TB: <" << ShapeTB::kM << "," << ShapeTB::kN << "," << ShapeTB::kK << ">"
               << " Warp: <" << ShapeWarp::kM << "," << ShapeWarp::kN << "," << ShapeWarp::kK << ">"
+              << " Inst: <" << ShapeOp::kM << "," << ShapeOp::kN << "," << ShapeOp::kK << ">"
               << " Stages: " << STAGES << "\n"
               << "  [Result] Time: " << std::fixed << std::setprecision(3) << ms/100.0 << " ms | "
               << "TFLOPs: " << tflops << std::endl;
@@ -134,6 +138,8 @@ void run_gemm_core(int m, int n, int k) {
 
     cudaFree(dev_A); cudaFree(dev_B); cudaFree(dev_C); 
     if(ws) cudaFree(ws);
+
+    return tflops;
 }
 
 int main(int argc, char** argv) {
