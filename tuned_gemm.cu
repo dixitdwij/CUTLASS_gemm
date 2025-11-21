@@ -8,9 +8,11 @@
 #include "cutlass/numeric_types.h"
 #include "cutlass/gemm/device/gemm.h"
 
-// =============================================================================
+// Configuration for benchmarking
+#define WARMUP_RUNS 10
+#define MEASURED_RUNS 100
+
 // 1. The Core GEMM Kernel (Templated)
-// =============================================================================
 template <
     typename ShapeTB, 
     typename ShapeWarp, 
@@ -42,7 +44,7 @@ void run_gemm_core(int m, int n, int k) {
         Stages
     >;
 
-    // --- Setup & Run ---
+    // Setup & Run
     ElementType *dev_A, *dev_B, *dev_C;
     size_t size_A = size_t(m) * k * sizeof(ElementType);
     size_t size_B = size_t(k) * n * sizeof(ElementType);
@@ -71,11 +73,11 @@ void run_gemm_core(int m, int n, int k) {
     cudaEventCreate(&start); cudaEventCreate(&stop);
 
     // Warmup
-    for(int i=0; i<10; ++i) gemm_op(arguments, ws);
+    for(int i=0; i<WARMUP_RUNS; ++i) gemm_op(arguments, ws);
     cudaDeviceSynchronize();
 
     cudaEventRecord(start);
-    for(int i=0; i<100; ++i) gemm_op(arguments, ws);
+    for(int i=0; i<MEASURED_RUNS; ++i) gemm_op(arguments, ws);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
@@ -83,19 +85,22 @@ void run_gemm_core(int m, int n, int k) {
     cudaEventElapsedTime(&ms, start, stop);
     double tflops = (2.0 * m * n * k) / ((ms/100.0) / 1000.0) / 1e12;
 
+    std::cout << "==========================================\n";
+    std::cout << "DataType    : " << "BF16" << "\n";
+    std::cout << "Runs        : " << WARMUP_RUNS << " warmup + " << MEASURED_RUNS << " measured\n";
+    std::cout << "Matrix Size : " << m << " x " << n << " x " << k << "\n";
     std::cout << "  [Config] TB: <" << ShapeTB::kM << "," << ShapeTB::kN << "," << ShapeTB::kK << ">"
               << " Warp: <" << ShapeWarp::kM << "," << ShapeWarp::kN << "," << ShapeWarp::kK << ">"
               << " Stages: " << Stages << "\n"
               << "  [Result] Time: " << std::fixed << std::setprecision(3) << ms/100.0 << " ms | "
               << "TFLOPs: " << tflops << std::endl;
+    std::cout << "==========================================\n";
 
     cudaFree(dev_A); cudaFree(dev_B); cudaFree(dev_C); 
     if(ws) cudaFree(ws);
 }
 
-// =============================================================================
 // 2. Dispatch Logic (The Magic)
-// =============================================================================
 
 // Macro to reduce boilerplate code
 // If user inputs match the macro arguments, instantiate that specific template
@@ -115,24 +120,37 @@ void dispatch(int m, int n, int k,
               int w_m, int w_n, int w_k, 
               int stages) {
 
-    // --- List of Valid Configurations to Compile ---
-    // You must manually list every combination you want to support.
-    // The compiler will generate code for ALL of these.
+    // List of Valid Configurations to Compile
+    // Manually list every combination to be supported.
     
     // Shape Set 1: 128x256x32
+    DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  2);
     DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  3);
     DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  4);
     DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  5);
+    DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  6);
+    DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  7);
+    DISPATCH_GEMM(128, 256, 32,  64, 64, 32,  8);    
 
     // Shape Set 2: 256x128x32
+    DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  2);
     DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  3);
     DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  4);
     DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  5);
+    DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  6);
+    DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  7);
+    DISPATCH_GEMM(256, 128, 32,  64, 64, 32,  8);    
 
     // Shape Set 3: 128x128x32 (Smaller tile)
+    DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  2);
     DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  3);
     DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  4);
     DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  5);
+    DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  6);
+    DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  7);
+    DISPATCH_GEMM(128, 128, 32,  64, 64, 32,  8); 
+    
+    DISPATCH_GEMM(128, 64, 32,  32, 32, 32,  4);    
 
     // If we get here, the user asked for a config we didn't pre-compile
     std::cerr << "Error: Configuration not supported (was not pre-compiled)." << std::endl;
@@ -147,7 +165,7 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // Parse User Input
+    // User Input
     int m = std::atoi(argv[1]);
     int n = std::atoi(argv[2]);
     int k = std::atoi(argv[3]);
@@ -162,7 +180,7 @@ int main(int argc, char** argv) {
 
     int stages = std::atoi(argv[10]);
 
-    // Run Dispatcher
+    // Dispatcher
     dispatch(m, n, k, tb_m, tb_n, tb_k, w_m, w_n, w_k, stages);
 
     return 0;
