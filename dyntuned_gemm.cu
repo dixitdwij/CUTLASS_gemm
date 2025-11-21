@@ -83,15 +83,15 @@ double run_gemm_core(int m, int n, int k) {
         constexpr DataType dtype = DataType::FP32;
         // Tolerance: TF32 has 10 bits mantissa (similar to FP16) but 8 bits exponent. 
         // Precision is lower than native FP32.
-        double tolerance = 1e-3; 
+        [[maybe_unused]] double tolerance = 1e-3; 
     #elif defined(FP_16)
         using ElementType = cutlass::half_t;
         constexpr DataType dtype = DataType::FP16;
-        double tolerance = 5e-3; // Half precision
+        [[maybe_unused]] double tolerance = 5e-3; // Half precision
     #elif defined(BF_16)
         using ElementType = cutlass::bfloat16_t;
         constexpr DataType dtype = DataType::BF16;
-        double tolerance = 5e-2; // Bfloat16 has very low precision (7 mantissa bits)
+        [[maybe_unused]] double tolerance = 5e-2; // Bfloat16 has very low precision (7 mantissa bits)
     #else
         static_assert(false, "Define -DFP_32, -DFP_16, or -DBF_16");
     #endif
