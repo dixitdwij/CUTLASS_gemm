@@ -3,6 +3,9 @@
 #include <string>
 #include <cstdlib>
 #include <iomanip>
+#include <cmath>
+#include <algorithm>
+#include <random>
 
 #include "cutlass/cutlass.h"
 #include "cutlass/numeric_types.h"
@@ -27,40 +30,75 @@ REQUIRED_MACROS
 
 #undef X
 
+// Configuration
+#define WARMUP_RUNS 10
+#define MEASURED_RUNS 50 
+
+// Helper: CPU Reference GEMM
+template <typename T>
+void cpu_gemm(int M, int N, int K, T alpha, const T *A, const T *B, T beta, T *C) {
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < N; ++j) {
+            float accum = 0.0f;
+            for (int k = 0; k < K; ++k) {
+                // Convert to float for calculation to minimize intermediate rounding errors
+                float a = static_cast<float>(A[i * K + k]);
+                float b = static_cast<float>(B[k * N + j]);
+                accum += a * b;
+            }
+            // C = alpha * (A*B) + beta * C
+            float c_old = static_cast<float>(C[i * N + j]);
+            C[i * N + j] = static_cast<T>(static_cast<float>(alpha) * accum + static_cast<float>(beta) * c_old);
+        }
+    }
+}
+
+// Helper: Random Initialization
+template <typename T>
+void initialize_tensor(T* data, size_t count, float min = -1.0f, float max = 1.0f) {
+    std::default_random_engine generator(2024); // Fixed seed for reproducibility
+    std::uniform_real_distribution<float> distribution(min, max);
+    for (size_t i = 0; i < count; ++i) {
+        data[i] = static_cast<T>(distribution(generator));
+    }
+}
+
 enum struct DataType { FP32, FP16, BF16 };
 
 std::ostream& operator<<(std::ostream& os, DataType dtype) {
     switch(dtype) {
         case DataType::FP16: os << "fp16"; break;
-        case DataType::FP32: os << "fp32"; break;
+        case DataType::FP32: os << "fp32 (tf32)"; break;
         case DataType::BF16: os << "bf16"; break;
         default: os << "Unknown"; break;
     }
     return os;
 }
 
-// Configuration for benchmarking
-#define WARMUP_RUNS 10
-#define MEASURED_RUNS 100
-
-// 1. The Core GEMM Kernel (Templated)
+// 1. The Core GEMM Kernel
 double run_gemm_core(int m, int n, int k) {
 
     #if defined(FP_32)
         using ElementType = float;
         constexpr DataType dtype = DataType::FP32;
+        // Tolerance: TF32 has 10 bits mantissa (similar to FP16) but 8 bits exponent. 
+        // Precision is lower than native FP32.
+        double tolerance = 1e-3; 
     #elif defined(FP_16)
         using ElementType = cutlass::half_t;
         constexpr DataType dtype = DataType::FP16;
+        double tolerance = 5e-3; // Half precision
     #elif defined(BF_16)
         using ElementType = cutlass::bfloat16_t;
         constexpr DataType dtype = DataType::BF16;
+        double tolerance = 5e-2; // Bfloat16 has very low precision (7 mantissa bits)
     #else
-        static_assert(false, "DataType not defined. Define one of FP32, FP16, BF16 using -D during compilation.");
+        static_assert(false, "Define -DFP_32, -DFP_16, or -DBF_16");
     #endif
 
     using Layout = cutlass::layout::RowMajor;
     using ElementAccumulator = float;
+    
     using ShapeOp = cutlass::gemm::GemmShape<INST_M, INST_N, INST_K>;
     using ShapeTB = cutlass::gemm::GemmShape<TB_M, TB_N, TB_K>;
     using ShapeWarp = cutlass::gemm::GemmShape<W_M, W_N, W_K>;
@@ -83,18 +121,42 @@ double run_gemm_core(int m, int n, int k) {
         STAGES
     >;
 
-    // Setup & Run
-    ElementType *dev_A, *dev_B, *dev_C;
-    size_t size_A = size_t(m) * k * sizeof(ElementType);
-    size_t size_B = size_t(k) * n * sizeof(ElementType);
-    size_t size_C = size_t(m) * n * sizeof(ElementType);
+    // 1. Memory Allocation (Host & Device)
+    size_t count_A = size_t(m) * k; 
+    size_t count_B = size_t(k) * n; 
+    size_t count_C = size_t(m) * n; 
+    size_t size_A = count_A * sizeof(ElementType);
+    size_t size_B = count_B * sizeof(ElementType);
+    size_t size_C = count_C * sizeof(ElementType);
 
+    // Device pointers
+    ElementType *dev_A, *dev_B, *dev_C;
     cudaMalloc(&dev_A, size_A);
     cudaMalloc(&dev_B, size_B);
     cudaMalloc(&dev_C, size_C);
 
+    // Host pointers
+    std::vector<ElementType> host_A(count_A);
+    std::vector<ElementType> host_B(count_B);
+    std::vector<ElementType> host_C(count_C); // Stores GPU result
+    std::vector<ElementType> host_Ref(count_C); // Stores CPU Reference
+
+    // 2. Initialization
+    initialize_tensor(host_A.data(), count_A);
+    initialize_tensor(host_B.data(), count_B);
+    // Fill C with zeros
+    std::fill(host_C.begin(), host_C.end(), static_cast<ElementType>(0.0f));
+    std::fill(host_Ref.begin(), host_Ref.end(), static_cast<ElementType>(0.0f));
+
+    // Copy Host -> Device
+    cudaMemcpy(dev_A, host_A.data(), size_A, cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_B, host_B.data(), size_B, cudaMemcpyHostToDevice);
+    cudaMemset(dev_C, 0, size_C); // Reset device C
+
+    // 3. Setup Arguments
+    // Alpha = 1.0, Beta = 0.0 (Overwrite C)
     typename Gemm::Arguments arguments(
-        {m, n, k}, {dev_A, k}, {dev_B, n}, {dev_C, n}, {dev_C, n}, {1.0f, 1.0f}
+        {m, n, k}, {dev_A, k}, {dev_B, n}, {dev_C, n}, {dev_C, n}, {1.0f, 0.0f}
     );
 
     Gemm gemm_op;
@@ -107,7 +169,7 @@ double run_gemm_core(int m, int n, int k) {
         exit(1);
     }
 
-    // Profile
+    // 4. Performance Profiling
     cudaEvent_t start, stop;
     cudaEventCreate(&start); cudaEventCreate(&stop);
 
@@ -115,6 +177,7 @@ double run_gemm_core(int m, int n, int k) {
     for(int i=0; i<WARMUP_RUNS; ++i) gemm_op(arguments, ws);
     cudaDeviceSynchronize();
 
+    // Measure
     cudaEventRecord(start);
     for(int i=0; i<MEASURED_RUNS; ++i) gemm_op(arguments, ws);
     cudaEventRecord(stop);
@@ -122,19 +185,47 @@ double run_gemm_core(int m, int n, int k) {
 
     float ms = 0;
     cudaEventElapsedTime(&ms, start, stop);
-    double tflops = (2.0 * m * n * k) / ((ms/100.0) / 1000.0) / 1e12;
+    double tflops = (2.0 * m * n * k) / ((ms/MEASURED_RUNS) / 1000.0) / 1e12;
 
     std::cout << "==========================================\n";
     std::cout << "DataType    : " << dtype << "\n";
-    std::cout << "Runs        : " << WARMUP_RUNS << " warmup + " << MEASURED_RUNS << " measured\n";
     std::cout << "Matrix Size : " << m << " x " << n << " x " << k << "\n";
-    std::cout << "  [Config] TB: <" << ShapeTB::kM << "," << ShapeTB::kN << "," << ShapeTB::kK << ">"
-              << " Warp: <" << ShapeWarp::kM << "," << ShapeWarp::kN << "," << ShapeWarp::kK << ">"
-              << " Inst: <" << ShapeOp::kM << "," << ShapeOp::kN << "," << ShapeOp::kK << ">"
-              << " Stages: " << STAGES << "\n"
-              << "  [Result] Time: " << std::fixed << std::setprecision(3) << ms/100.0 << " ms | "
+    std::cout << "  [Result] Time: " << std::fixed << std::setprecision(3) 
+              << ms/MEASURED_RUNS << " ms | "
               << "TFLOPs: " << tflops << std::endl;
     std::cout << "==========================================\n";
+
+    // 5. Verification
+    #ifdef VERIFY 
+        std::cout << "  [Verify] Running CPU reference check... ";
+        std::cout.flush();
+        
+        // Copy GPU result -> Host
+        cudaMemcpy(host_C.data(), dev_C, size_C, cudaMemcpyDeviceToHost);
+
+        // Calculate CPU Reference
+        cpu_gemm(m, n, k, 
+                 static_cast<ElementType>(1.0f), 
+                 host_A.data(), host_B.data(), 
+                 static_cast<ElementType>(0.0f), 
+                 host_Ref.data());
+
+        // Compare
+        double max_err = 0.0;
+        for (size_t i = 0; i < count_C; ++i) {
+            float gpu_val = static_cast<float>(host_C[i]);
+            float ref_val = static_cast<float>(host_Ref[i]);
+            float diff = std::abs(gpu_val - ref_val);
+            float rel_err = diff / (std::abs(ref_val) + 0.0001f); // Avoid div by zero
+            if (rel_err > max_err) max_err = rel_err;
+        }
+
+        if (max_err < tolerance) {
+            std::cout << "PASS (Max Rel Err: " << max_err << ")" << std::endl;
+        } else {
+            std::cout << "FAIL (Max Rel Err: " << max_err << " > " << tolerance << ")" << std::endl;
+        }
+    #endif
 
     cudaFree(dev_A); cudaFree(dev_B); cudaFree(dev_C); 
     if(ws) cudaFree(ws);
@@ -143,18 +234,15 @@ double run_gemm_core(int m, int n, int k) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <M> <N> <K>" << std::endl;
-        std::cerr << "Expecting <TB_M> <TB_N> <TB_K> <W_M> <W_N> <W_K> <Stages> as compile-time arguments" << std::endl;
+    if (argc < 4) {
+        std::cerr << "Usage: " << argv[0] << " <M> <N> <K> [verify=0/1]" << std::endl;
         return -1;
     }
 
-    // User Input
     int m = std::atoi(argv[1]);
     int n = std::atoi(argv[2]);
     int k = std::atoi(argv[3]);
 
-    // Dispatcher
     run_gemm_core(m, n, k);
 
     return 0;
