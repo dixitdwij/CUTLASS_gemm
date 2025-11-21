@@ -96,6 +96,25 @@ double run_gemm_core(int m, int n, int k) {
         static_assert(false, "Define -DFP_32, -DFP_16, or -DBF_16");
     #endif
 
+    #if defined(SwizzleIdentity)
+        #ifndef SwizzleN
+            #error "SwizzleIdentity requires -DSwizzleN=..."
+        #endif
+        using SwizzleThreadBlock = cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<SwizzleN>;
+        std::string swizzle_info = "Identity (N=" + std::to_string(SwizzleN) + ")";
+    #elif defined(SwizzleSplitK)
+        #ifndef SwizzleN
+            #error "SwizzleSplitK requires -DSwizzleN=..."
+        #endif
+        using SwizzleThreadBlock = cutlass::gemm::threadblock::GemmSplitKIdentityThreadblockSwizzle<SwizzleN>;
+        std::string swizzle_info = "SplitK Identity (N=" + std::to_string(SwizzleN) + ")";
+    #elif defined(SwizzleHorizontal)
+        using SwizzleThreadBlock = cutlass::gemm::threadblock::GemmHorizontalThreadblockSwizzle;
+        std::string swizzle_info = "Horizontal";
+    #else
+        #error "Swizzle policy not defined. Use -DSwizzleIdentity, -DSwizzleSplitK, or -DSwizzleHorizontal"
+    #endif
+
     using Layout = cutlass::layout::RowMajor;
     using ElementAccumulator = float;
     
@@ -117,7 +136,7 @@ double run_gemm_core(int m, int n, int k) {
             ElementType, 128 / cutlass::sizeof_bits<ElementType>::value,
             ElementAccumulator, ElementAccumulator
         >,
-        cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+        SwizzleThreadBlock,
         STAGES
     >;
 
@@ -190,6 +209,11 @@ double run_gemm_core(int m, int n, int k) {
     std::cout << "==========================================\n";
     std::cout << "DataType    : " << dtype << "\n";
     std::cout << "Matrix Size : " << m << " x " << n << " x " << k << "\n";
+    std::cout << "  [Config] TB: <" << ShapeTB::kM << "," << ShapeTB::kN << "," << ShapeTB::kK << ">"
+              << " Warp: <" << ShapeWarp::kM << "," << ShapeWarp::kN << "," << ShapeWarp::kK << ">"
+              << " Swizzle: " << swizzle_info 
+              << " Stages: " << STAGES << "\n";
+    std::cout << "Runs        : " << WARMUP_RUNS << " warmup + " << MEASURED_RUNS << " measured\n";
     std::cout << "  [Result] Time: " << std::fixed << std::setprecision(3) 
               << ms/MEASURED_RUNS << " ms | "
               << "TFLOPs: " << tflops << std::endl;
