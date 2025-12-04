@@ -42,7 +42,8 @@ class CutlassAutoTuner:
                 "--expt-relaxed-constexpr",
                 "-std=c++17",
                 "-I./lib/cutlass/include",
-                "-I./lib/cutlass/tools/util/include"
+                "-I./lib/cutlass/tools/util/include",
+                "-DVERIFY"
         ]
         cmd.append(f"-D{dtype_flag}")
         
@@ -62,6 +63,7 @@ class CutlassAutoTuner:
 
         cmd.append(f"-DSTAGES={config['STAGES']}")
 
+        print(f"[AUTOTUNER] Attempting Compiling with config: {config}", file=sys.stderr)
         try:
             # Suppress output unless error
             subprocess.check_output(cmd, stderr=subprocess.STDOUT)
@@ -74,7 +76,9 @@ class CutlassAutoTuner:
         
     def run_kernel(self, m: int, n: int, k: int) -> float:
         try:
+            print(f"[AUTOTUNER] Attempting Running kernel with MNK=({m},{n},{k})", file=sys.stderr)
             output: str = subprocess.check_output([f"./{self.binary_path}", str(m), str(n), str(k)], stderr=subprocess.STDOUT, encoding='utf-8')
+            print(f"[AUTOTUNER] Kernel Execution Output:\n{output}", file=sys.stderr)
             match_result = re.search(r"TFLOPs:\s*(\d+\.?\d*)", output)
             if match_result:
                 perf = match_result.group(1)
@@ -129,6 +133,32 @@ class CutlassAutoTuner:
 
         return search_space
     
+    def _manual_search_space(self) -> List[Dict[str, int | str]]:
+        configs = [
+            {"TB_M":128,"TB_N":256,"TB_K":64,"W_M":64,"W_N":64,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":3, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":64,"TB_N":256,"TB_K":32,"W_M":32,"W_N":64,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":128,"TB_N":128,"TB_K":32,"W_M":64,"W_N":64,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":128,"TB_N":64,"TB_K":32,"W_M":64,"W_N":32,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":64,"TB_N":128,"TB_K":32,"W_M":32,"W_N":64,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":128,"TB_N":32,"TB_K":32,"W_M":64,"W_N":32,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":64,"TB_N":32,"TB_K":32,"W_M":32,"W_N":32,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":5, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":32,"TB_N":64,"TB_K":32,"W_M":32,"W_N":32,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":5, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":128,"TB_N":128,"TB_K":64,"W_M":64,"W_N":64,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":128,"TB_N":64,"TB_K":64,"W_M":64,"W_N":32,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":64,"TB_N":128,"TB_K":64,"W_M":32,"W_N":64,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":256,"TB_N":256,"TB_K":32,"W_M":64,"W_N":64,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":3, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":256,"TB_N":128,"TB_K":32,"W_M":64,"W_N":64,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":3, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":128,"TB_N":256,"TB_K":32,"W_M":64,"W_N":64,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":3, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":64,"TB_N":64,"TB_K":32,"W_M":32,"W_N":32,"W_K":32,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":5, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":256,"TB_N":256,"TB_K":64,"W_M":64,"W_N":64,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":3, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":256,"TB_N":128,"TB_K":64,"W_M":64,"W_N":64,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":3, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":128,"TB_N":256,"TB_K":64,"W_M":64,"W_N":64,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":256,"TB_N":256,"TB_K":64,"W_M":64,"W_N":64,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":4, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+            {"TB_M":128,"TB_N":128,"TB_K":64,"W_M":64,"W_N":64,"W_K":64,"INST_M":16,"INST_N":8,"INST_K":16,"STAGES":3, "SwizzleStrategy":"SwizzleIdentity","SwizzleN":1,},
+        ]
+        return configs
+
+    
     def tune(self, m: int, n: int, k: int, dtype: str = "BF_16") -> Dict[str, int | str]:
         dtype_flag = {
             "FP_32": "FP_32",
@@ -138,7 +168,8 @@ class CutlassAutoTuner:
 
         print(f"[AUTOTUNER] Starting Autotuning for {dtype} MNK=({m},{n},{k})...")
 
-        search_space = self.generate_search_space()
+        # search_space = self.generate_search_space()
+        search_space = self._manual_search_space()
         print(f"[AUTOTUNER] Generated {len(search_space)} potential configurations.")
 
         best_perf = 0.0

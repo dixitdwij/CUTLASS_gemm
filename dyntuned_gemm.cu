@@ -11,7 +11,7 @@
 #include "cutlass/numeric_types.h"
 #include "cutlass/gemm/device/gemm.h"
 
-// 0. Macros for Static Parameters
+// Macros for Static Parameters
 #define REQUIRED_MACROS \
     X(TB_M) \
     X(TB_N) \
@@ -30,11 +30,17 @@ REQUIRED_MACROS
 
 #undef X
 
-// Configuration
-#define WARMUP_RUNS 10
-#define MEASURED_RUNS 50 
+// Number of warmup and measured runs
+#ifndef WARMUP_RUNS
+    #define WARMUP_RUNS 10
+#endif
+#ifndef MEASURED_RUNS
+    #define MEASURED_RUNS 10
+#endif
 
-// Helper: CPU Reference GEMM
+#define RANDOM_SEED 2025
+
+// CPU GEMM
 template <typename T>
 void cpu_gemm(int M, int N, int K, T alpha, const T *A, const T *B, T beta, T *C) {
     for (int i = 0; i < M; ++i) {
@@ -53,10 +59,10 @@ void cpu_gemm(int M, int N, int K, T alpha, const T *A, const T *B, T beta, T *C
     }
 }
 
-// Helper: Random Initialization
+// Random Initialization
 template <typename T>
 void initialize_tensor(T* data, size_t count, float min = -1.0f, float max = 1.0f) {
-    std::default_random_engine generator(2024); // Fixed seed for reproducibility
+    std::default_random_engine generator(RANDOM_SEED);
     std::uniform_real_distribution<float> distribution(min, max);
     for (size_t i = 0; i < count; ++i) {
         data[i] = static_cast<T>(distribution(generator));
@@ -75,7 +81,7 @@ std::ostream& operator<<(std::ostream& os, DataType dtype) {
     return os;
 }
 
-// 1. The Core GEMM Kernel
+// The Core GEMM Kernel
 double run_gemm_core(int m, int n, int k) {
 
     #if defined(FP_32)
@@ -140,7 +146,7 @@ double run_gemm_core(int m, int n, int k) {
         STAGES
     >;
 
-    // 1. Memory Allocation (Host & Device)
+    // Memory Allocation (Host & Device)
     size_t count_A = size_t(m) * k; 
     size_t count_B = size_t(k) * n; 
     size_t count_C = size_t(m) * n; 
@@ -160,10 +166,10 @@ double run_gemm_core(int m, int n, int k) {
     std::vector<ElementType> host_C(count_C); // Stores GPU result
     std::vector<ElementType> host_Ref(count_C); // Stores CPU Reference
 
-    // 2. Initialization
+    // Initialization
     initialize_tensor(host_A.data(), count_A);
     initialize_tensor(host_B.data(), count_B);
-    // Fill C with zeros
+    // Zero initialised C
     std::fill(host_C.begin(), host_C.end(), static_cast<ElementType>(0.0f));
     std::fill(host_Ref.begin(), host_Ref.end(), static_cast<ElementType>(0.0f));
 
@@ -188,13 +194,13 @@ double run_gemm_core(int m, int n, int k) {
         exit(1);
     }
 
-    // 4. Performance Profiling
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start); cudaEventCreate(&stop);
-
     // Warmup
     for(int i=0; i<WARMUP_RUNS; ++i) gemm_op(arguments, ws);
     cudaDeviceSynchronize();
+
+    // Performance Profiling
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start); cudaEventCreate(&stop);
 
     // Measure
     cudaEventRecord(start);
@@ -219,7 +225,7 @@ double run_gemm_core(int m, int n, int k) {
               << "TFLOPs: " << tflops << std::endl;
     std::cout << "==========================================\n";
 
-    // 5. Verification
+    // Verification
     #ifdef VERIFY 
         std::cout << "  [Verify] Running CPU reference check... ";
         std::cout.flush();

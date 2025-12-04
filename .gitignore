@@ -1,3 +1,7 @@
 .vscode/*
 bin/*
 !bin/.gitkeep
+temp_ref.cu
+output/*
+temp.py
+.venv/*

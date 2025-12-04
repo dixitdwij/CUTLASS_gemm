@@ -17,6 +17,6 @@ nvcc -O3 -std=c++17 \
     -o cublass_gemm$(python3-config --extension-suffix)
 echo "[SBATCH] Cublas baseline set up"
 
-python3 autotuner.py --m 8192 --n 8192 --k 64 --dtype=BF_16 --source dyntuned_gemm.cu --binary bin/dyntuned_gemm
+python3 autotuner.py --m 8192 --n 8192 --k 256 --dtype=BF_16 --source dyntuned_gemm.cu --binary bin/dyntuned_gemm
 
 echo "[SBATCH] Run completed"
