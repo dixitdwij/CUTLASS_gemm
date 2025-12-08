@@ -29,6 +29,7 @@ Larger K (e.g., 64) improves inner loop efficiency but increases register pressu
 For compile:
 srun -A dphpc --time=05:00 --nodelist=studgpu-node09 nvcc dyntuned_gemm.cu -o bin/dyntuned_gemm -I ./lib/cutlass/include/ -I ./lib/cutlass/tools/util/include/ --expt-relaxed-constexpr -arch=sm_90 -std=c++17 -DTB_M=128 -DTB_N=256 -DTB_K=32 -DW_M=64 -DW_N=64 -DW_K=32 -DSTAGES=2 -DFP_32
 srun -A dphpc --time=05:00 --nodelist=studgpu-node09 nvcc dyntuned_gemm.cu -o bin/dyntuned_gemm -I ./lib/cutlass/include/ -I ./lib/cutlass/tools/util/include/ --expt-relaxed-constexpr -arch=sm_90 -std=c++17 -DTB_M=128 -DTB_N=256 -DTB_K=32 -DW_M=64 -DW_N=64 -DW_K=32 -DINST_M=16 -DINST_N=8 -DINST_K=16 -DSTAGES=2 -DFP_16 -DVERIFY
+srun -A dphpc --time=05:00 --nodelist=studgpu-node09 nvcc dyntuned_gemm.cu -o bin/dyntuned_gemm -I ./lib/cutlass/include/ -I ./lib/cutlass/tools/util/include/ --expt-relaxed-constexpr -arch=sm_90 -std=c++17 -DTB_M=128 -DTB_N=64 -DTB_K=32 -DW_M=64 -DW_N=32 -DW_K=32 -DINST_M=16 -DINST_N=8 -DINST_K=16 -DSTAGES=4 -DFP_16 -DVERIFY
 
 For running:
 srun -A dphpc --time=01:00 --nodelist=studgpu-node09 ./bin/dyntuned_gemm 8192 8192 512

@@ -1,3 +1,11 @@
 .vscode/*
 bin/*
 !bin/.gitkeep
+.vscode/*
+.venv/*
+__pycache__/*
+*.pyc
+*.pyo
+*.pyd
+ref/
+ref1/
