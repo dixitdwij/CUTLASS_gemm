@@ -10,19 +10,19 @@ import multiprocessing as mp
 
 class CutlassAutotunerParallel:
     INST_SHAPES = [
-        (16, 8, 16),
+        (1, 1, 1),
         (16, 8, 8), 
-        (1, 1, 1)
+        (16, 8, 16)
     ]
     TB_TILES = [
-        (128, 128, 32),
-        (128, 64, 32),
-        (64, 128, 32),
         (64, 64, 32),
+        (64, 128, 32),
+        (128, 64, 32),
+        (128, 128, 32),
         (256, 128, 32),
-        (128, 256, 32),
+        (128, 256, 32)
     ]
-    WARP_DIVISORS = [(2, 2, 1), (4, 2, 1), (2, 4, 1), (1, 1, 1)]
+    WARP_DIVISORS = [(2, 2, 1), (4, 2, 1), (2, 4, 1), (1, 1, 1)]    # Divisors over thread block sizes to generate candidate warp sizes
     STAGES_LIST = [2, 3, 4, 5]
     SWIZZLE_FUNCS = ["SwizzleIdentity", "SwizzleKSplit"]
     SWIZZLE_N_VALUES = [1, 2, 4, 8]

@@ -1,7 +1,10 @@
 import argparse
+import multiprocessing as mp
 import subprocess
 import sys
 
+from compile_util import compiler_manager_task
+from running_util import runner_manager_task
 
 def get_gpu_count() -> int:
     try:
@@ -31,16 +34,48 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     num_gpus = get_gpu_count()
+    print(f"[LOG] [MAIN] Detected {num_gpus} GPUs.", file=sys.stderr)
 
     # Create mp queues (autotuner -> compiler -> runner -> autotuner)
-    pass
+    autotuner_compile_queue = mp.Queue()
+    compile_runner_queue = mp.Queue()
+    runner_autotuner_queue = mp.Queue()
 
     # Instantiate compiler pool
-    pass
+    compiler_proc: mp.Process = mp.Process(
+        target=compiler_manager_task,
+        args=(
+            autotuner_compile_queue,
+            compile_runner_queue,
+            args.compile_workers,
+            args.source,
+            args.binary,
+            args.dtype
+        ),
+        daemon=True,
+        name="CompilerManager"
+    )
+    compiler_proc.start() 
+    print(f"[LOG] [MAIN] Started Compiler Manager Process with {args.compile_workers} pool", file=sys.stderr)
 
     # Instantiate runner pool with num_gpus workers
-    pass
-
+    runner_proc: mp.Process = mp.Process(
+        target=runner_manager_task,
+        args=(
+            compile_runner_queue,
+            runner_autotuner_queue,
+            num_gpus,
+            args.m,
+            args.n,
+            args.k,
+            args.dump
+        ),
+        daemon=True,
+        name="RunnerManager"
+    )
+    runner_proc.start()
+    print(f"[LOG] [MAIN] Started Runner Manager Process with {num_gpus} pool", file=sys.stderr)
+    
     # Instantiate autotuner
     pass
 

@@ -9,3 +9,7 @@ __pycache__/*
 *.pyd
 ref/
 ref1/
+ncu_temp.txt
+ncu_temp.json
+ref.txt
+run.sbatch
