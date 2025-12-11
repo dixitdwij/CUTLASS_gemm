@@ -15,6 +15,7 @@ class KernelConfig:
         TB_M: int, TB_N: int, TB_K: int,
         W_M: int, W_N: int, W_K: int,
         INST_M: int, INST_N: int, INST_K: int,
+        stages:int,
         swizzle_policy: SwizzlePolicy,
         SwizzleN: int
     ):
@@ -30,6 +31,8 @@ class KernelConfig:
         self.INST_N = INST_N
         self.INST_K = INST_K
 
+        self.stages = stages
+
         self.swizzle_policy = swizzle_policy
         self.SwizzleN = SwizzleN
 
@@ -44,6 +47,7 @@ class KernelConfig:
             f"-DINST_M={self.INST_M}",
             f"-DINST_N={self.INST_N}",
             f"-DINST_K={self.INST_K}",
+            f"-DSTAGES={self.stages}",
             f"-D{self.swizzle_policy.value}",
             f"-DSwizzleN={self.SwizzleN}"
         ]
@@ -53,6 +57,7 @@ class KernelConfig:
             f"TB_{self.TB_M}x{self.TB_N}x{self.TB_K}"
             f"__W_{self.W_M}x{self.W_N}x{self.W_K}"
             f"__INST_{self.INST_M}x{self.INST_N}x{self.INST_K}"
+            f"__STAGES_{self.stages}"
             f"__SWZ_{self.swizzle_policy.name}_N{self.SwizzleN}"
         )
     
@@ -78,6 +83,7 @@ class KernelConfig:
             TB_M=tb_vals[0], TB_N=tb_vals[1], TB_K=tb_vals[2],
             W_M=w_vals[0], W_N=w_vals[1], W_K=w_vals[2],
             INST_M=inst_vals[0], INST_N=inst_vals[1], INST_K=inst_vals[2],
+            stages=int(seg_map["STAGES"]),
             swizzle_policy=swizzle_policy,
             SwizzleN=swizzle_n,
         )

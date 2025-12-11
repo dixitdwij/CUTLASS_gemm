@@ -13,3 +13,5 @@ ncu_temp.txt
 ncu_temp.json
 ref.txt
 run.sbatch
+dump/*
+output/*

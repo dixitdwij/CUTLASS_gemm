@@ -31,7 +31,7 @@ REQUIRED_MACROS
 #undef X
 
 // Run Configuration
-#define WARMUP_RUNS 10
+#define WARMUP_RUNS 5
 #define MEASURED_RUNS 10 
 
 // CPU Reference GEMM
