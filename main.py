@@ -24,13 +24,28 @@ if __name__ == "__main__":
     parser.add_argument("--dtype", type=str, choices=["BF_16", "FP_16", "FP_32"], required=True)
     parser.add_argument("--source", type=str, default="gemm_kernel.cu")
     parser.add_argument("--binary", type=str, default="bin/dyntuned_gemm")
+    parser.add_argument("--dump", type=str, default="dump/")
+    parser.add_argument("--compile-workers", type=int, default=4)
+    parser.add_argument("time", type=int, default=7200)
     
     args = parser.parse_args()
 
     num_gpus = get_gpu_count()
 
-    # Instantiate autotuner
-    # tuner = CutlassAutotuner(source_file=args.source, binary_file=args.binary)
-    # config = tuner.tune(args.m, args.n, args.k, dtype=args.dtype)
+    # Create mp queues (autotuner -> compiler -> runner -> autotuner)
+    pass
 
-    # print(f"[AUTOTUNER] Optimal Configuration: {config}")
+    # Instantiate compiler pool
+    pass
+
+    # Instantiate runner pool with num_gpus workers
+    pass
+
+    # Instantiate autotuner
+    pass
+
+    # Start autotuning
+    pass
+
+    # Clean up pools after timeout
+    pass

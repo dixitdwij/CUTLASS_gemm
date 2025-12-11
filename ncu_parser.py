@@ -2,7 +2,9 @@ import re
 import json
 import sys
 
-def parse_ncu_log(log_content: str):
+def parse_ncu_log(log_content: str) -> dict:
+    # Parses the ncu log content and returns json
+
     data = {}
     current_section = None
     
@@ -99,12 +101,13 @@ if __name__ == "__main__":
             with open(INPUT_FILE, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            json_output = parse_ncu_log(content)
+            data = parse_ncu_log(content)
 
-            print(json_output)
+            print(json.dumps(data, indent=4))
+            print(f'#####{data['GPU Speed Of Light Throughput']['Duration']['val']}#####')
             
             with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-                json.dump(json_output, f, indent=4)
+                json.dump(json.dumps(data, indent=4), f, indent=4)
                 
             print(f"Success! JSON data written to {OUTPUT_FILE}")
             
