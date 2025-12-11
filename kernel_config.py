@@ -33,8 +33,8 @@ class KernelConfig:
         self.swizzle_policy = swizzle_policy
         self.SwizzleN = SwizzleN
 
-    def compilation_flags(self):
-        tokens = [
+    def compilation_flags(self) -> list[str]:
+        return [
             f"-DTB_M={self.TB_M}",
             f"-DTB_N={self.TB_N}",
             f"-DTB_K={self.TB_K}",
@@ -47,9 +47,8 @@ class KernelConfig:
             f"-D{self.swizzle_policy.value}",
             f"-DSwizzleN={self.SwizzleN}"
         ]
-        return " ".join(tokens)
     
-    def kernel_id(self):
+    def kernel_id(self) -> str:
         return (
             f"TB_{self.TB_M}x{self.TB_N}x{self.TB_K}"
             f"__W_{self.W_M}x{self.W_N}x{self.W_K}"

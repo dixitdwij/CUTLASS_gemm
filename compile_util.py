@@ -10,6 +10,16 @@ _bin_path: str = "bin/"
 _dtype_str: str|None = None
 
 
+def _init_worker(source_file: str, bin_path: str, dtype_str: str) -> None:
+    # TODO: Cehck if thisis reqd as global vars are set by the manager before spawning pool
+    global _source_file
+    global _bin_path
+    global _dtype_str
+    _source_file = source_file
+    _bin_path = bin_path
+    _dtype_str = dtype_str
+
+
 def compilation_worker(config: KernelConfig) -> KernelConfig:
     binary_file = _bin_path + config.kernel_id()
     cmd = ["nvcc", _source_file, 
@@ -18,10 +28,10 @@ def compilation_worker(config: KernelConfig) -> KernelConfig:
             "--expt-relaxed-constexpr",
             "-std=c++17",
             "-I./lib/cutlass/include",
-            "-I./lib/cutlass/tools/util/include"
+            "-I./lib/cutlass/tools/util/include",
+            f'-D{_dtype_str}',
+            *config.compilation_flags()
     ]
-    cmd.append(f" -D{_dtype_str} ")
-    cmd.append(config.compilation_flags())
     
     try:
         # result = subprocess.run(cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,encoding='utf-8')
@@ -31,9 +41,9 @@ def compilation_worker(config: KernelConfig) -> KernelConfig:
         return config
     except subprocess.CalledProcessError as e:
         print(f"[ERROR] [COMPILER] Compilation failed for kernel: {config.kernel_id()}", file=sys.stderr)
-        print(f"[ERROR] [COMPILER] {e.stderr}")
+        print(f"[ERROR] [COMPILER] {e.stderr}")   # use e.output.decode("utf-8") if isinstance(e.output, bytes) else e.output for full error log
         config.register_compilation("", False)
-        return config
+        raise e
     
 
 def compiler_manager_task(
@@ -58,15 +68,18 @@ def compiler_manager_task(
         print(f"[LOG] [Compiler Manager] Compilation worker successful, scheduled for running", file=sys.stderr)
         output_queue.put(result)
 
-    def error_callback(error):
+    def error_callback(error: BaseException):
+        # error type annotated as BaseException to make linter happy
+        # subprocess.CalledProcessError will only be passed here (not that it matters much)
         print(f"[ERROR] [Compiler Manager] Compilation worker encountered an error: {error}", file=sys.stderr)
 
-    with mp.Pool(processes=num_compile_workers) as pool:
+    with mp.Pool(processes=num_compile_workers, initializer=_init_worker, initargs=(source_file, bin_path, dtype_str)) as pool:
         while True:
             config: KernelConfig = input_queue.get()
             
             if config is None:
                 print(f"[LOG] [Compiler Manager] Received termination signal. Exiting.", file=sys.stderr)
+                output_queue.put(None)  # Propagate termination signal
                 break
         
             pool.apply_async(compilation_worker, args=(config,), callback=result_callback, error_callback=error_callback)
