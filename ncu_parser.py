@@ -84,7 +84,8 @@ def parse_ncu_log(log_content: str):
                     # Append line to prev msg
                     data[current_section][last_msg_type] += " " + stripped_line
 
-    return json.dumps(data, indent=4)
+    return data
+    # return json.dumps(data, indent=4)
 
 import os
 if __name__ == "__main__":
