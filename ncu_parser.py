@@ -103,7 +103,7 @@ if __name__ == "__main__":
             
             data = parse_ncu_log(content)
 
-            print(json.dumps(data, indent=4))
+            # print(json.dumps(data, indent=4))
             print(f'#####{data['GPU Speed Of Light Throughput']['Duration']['val']}#####')
             
             with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:

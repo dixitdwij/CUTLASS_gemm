@@ -33,6 +33,7 @@ if __name__ == "__main__":
     parser.add_argument("--dump", type=str, default="dump/", help="Directory to dump NCU logs")
     parser.add_argument("--compile-workers", type=int, default=4, help="Number of concurrent compilation processes")
     parser.add_argument("--time", type=int, default=7200, help="Autotuning time budget in seconds")
+    parser.add_argument("--bar-size", type=int, default=10, help="Target number of candidates active in the pipeline (Bar Search size)")
     
     args = parser.parse_args()
 
@@ -47,17 +48,11 @@ if __name__ == "__main__":
     num_gpus = get_gpu_count()
     print(f"[LOG] [MAIN] Detected {num_gpus} GPUs.", file=sys.stderr)
 
-    # ---------------------------------------------------------
-    # Setup Multiprocessing Pipelines
-    # ---------------------------------------------------------
-    # Flow: Autotuner -> [autotuner_compile_queue] -> Compiler -> [compile_runner_queue] -> Runner -> [runner_autotuner_queue] -> Autotuner
-
     autotuner_compile_queue = mp.Queue()
     compile_runner_queue = mp.Queue()
     runner_autotuner_queue = mp.Queue()
 
-    # 1. Compiler Manager
-    # IMPORTANT: daemon=False is required because this process spawns its own Pool (children).
+    # Compiler Manager
     compiler_proc: mp.Process = mp.Process(
         target=compiler_manager_task,
         args=(
@@ -74,8 +69,7 @@ if __name__ == "__main__":
     compiler_proc.start() 
     print(f"[LOG] [MAIN] Started Compiler Manager with {args.compile_workers} workers", file=sys.stderr)
 
-    # 2. Runner Manager 
-    # IMPORTANT: daemon=False is required here as well.
+    # Runner Manager 
     runner_proc: mp.Process = mp.Process(
         target=runner_manager_task,
         args=(
@@ -93,19 +87,18 @@ if __name__ == "__main__":
     runner_proc.start()
     print(f"[LOG] [MAIN] Started Runner Manager with {num_gpus} workers", file=sys.stderr)
     
-    # 3. Autotuner Logic
+    # Autotuner Logic
     autotuner = CutlassAutotunerParallel(
         input_queue=autotuner_compile_queue,
         output_queue=runner_autotuner_queue,
         dim_m=args.m,
         dim_n=args.n,
-        dim_k=args.k
+        dim_k=args.k,
+        bar_size=args.bar_size
     )
 
-    # ---------------------------------------------------------
     # Start Tuning
-    # ---------------------------------------------------------
-    print(f"[LOG] [MAIN] Starting autotuning loop. Budget: {args.time}s", file=sys.stderr)
+    print(f"[LOG] [MAIN] Starting autotuning loop. Budget: {args.time}s, Bar Size: {args.bar_size}", file=sys.stderr)
     try:
         autotuner.tune(timeout_s=args.time)
     except KeyboardInterrupt:
@@ -113,9 +106,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n[ERROR] [MAIN] Critical exception: {e}", file=sys.stderr)
 
-    # ---------------------------------------------------------
     # Cleanup
-    # ---------------------------------------------------------
     print("[LOG] [MAIN] Cleaning up processes...", file=sys.stderr)
 
     # 1. Signal Compiler Manager to exit
