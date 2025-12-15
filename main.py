@@ -109,7 +109,6 @@ if __name__ == "__main__":
     # Cleanup
     print("[LOG] [MAIN] Cleaning up processes...", file=sys.stderr)
 
-    # 1. Signal Compiler Manager to exit
     # The compiler manager logic breaks its loop when it receives None
     autotuner_compile_queue.put(None)
     
@@ -119,8 +118,7 @@ if __name__ == "__main__":
         print("[LOG] [MAIN] Compiler Manager did not exit gracefully, terminating...", file=sys.stderr)
         compiler_proc.terminate()
 
-    # 2. Signal Runner Manager to exit
-    # Now that compiler is closed, we can safely send the stop signal to the runner
+    # Now that compiler is closed we can send the stop signal to the runner
     # (usually runner gets input from compiler, so we inject the None into that queue)
     compile_runner_queue.put(None)
     
