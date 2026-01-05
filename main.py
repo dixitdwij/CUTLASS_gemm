@@ -7,7 +7,7 @@ import time
 
 from compile_util import compiler_manager_task
 from running_util import runner_manager_task
-from autotuner_parallel import CutlassAutotunerParallel
+from cutlass_autotuner import CutlassAutotunerParallel
 
 def get_gpu_count() -> int:
     try:

@@ -15,3 +15,4 @@ ref.txt
 run.sbatch
 dump/*
 output/*
+kernels/*
