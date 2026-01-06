@@ -8,68 +8,62 @@ from typing import List, Optional, Set
 from queue import Empty
 
 from kernel_config import KernelConfig, SwizzlePolicy
-from ncu_parser import parse_ncu_log
-
-class KernelPerformance:
-    def __init__(self, parsed_data: dict):
-        self.parsed_data = parsed_data
-        
-        # Helper to safely extract values with defaults
-        def get_val(section, metric, default=0.0):
-            try:
-                return parsed_data.get(section, {}).get(metric, {}).get('val', default)
-            except:
-                return default
-
-        self.duration_ms: float = get_val('GPU Speed Of Light Throughput', 'Duration')
-        self.mem_throughput_pct: float = get_val('GPU Speed Of Light Throughput', 'Memory Throughput')
-        self.sm__pct: float = get_val('GPU Speed Of Light Throughput', 'Compute (SM) Throughput')
-        self.dram_throughput_pct: float = get_val('GPU Speed Of Light Throughput', 'DRAM Throughput')
-        self.l1_throughput_pct: float = get_val('GPU Speed Of Light Throughput', 'L1/TEX Cache Throughput')
-        self.l2_throughput_pct: float = get_val('GPU Speed Of Light Throughput', 'L2 Cache Throughput')
-        
-        self.ipc: float = get_val('Compute Workload Analysis', 'Executed Ipc Active')
-        
-        self.mem_max_bandwidth: float = get_val('Memory Workload Analysis', 'Max Bandwidth')
-        self.l1_tex_hit_rate_pct: float = get_val('Memory Workload Analysis', 'L1/TEX Hit Rate')
-        self.l2_hit_rate_pct: float = get_val('Memory Workload Analysis', 'L2 Hit Rate')
-        
-        self.reg_per_thread: int = int(get_val('Launch Statistics', 'Registers Per Thread', 0))
-
+from ncu_parser import parse_ncu_log, KernelPerformance
+from autotuner_policy import get_default_policy, ActionType
 
 class CutlassAutotunerParallel:
-    # Tunable Parameters
+    # 1. STRUCTURED SEARCH SPACE
+    
+    # Fixed Instruction Shapes (Usually fixed by hardware/precision, but can be searched)
     INST_SHAPES = [
         (16, 8, 8), 
         (16, 8, 16)
     ]
-    # Sorted roughly by size (M*N) for heuristic stepping
+
+    # Ordered by Size (M*N*K) then Aspect Ratio
+    # Index 0 is smallest tile, Index -1 is largest
     TB_TILES = [
-        (64, 64, 32),
-        (64, 128, 32),
-        (128, 64, 32),
-        (128, 128, 32),
-        (256, 128, 32),
-        (128, 256, 32)
+        (64, 64, 32),    # Size: 131k
+        (64, 128, 32),   # Size: 262k
+        (128, 64, 32),   # Size: 262k
+        (128, 128, 32),  # Size: 524k
+        (128, 256, 32),  # Size: 1M
+        (256, 128, 32)   # Size: 1M
     ]
-    # (Warp_M_Divisor, Warp_N_Divisor, Warp_K_Divisor)
-    WARP_DIVISORS = [(2, 2, 1), (4, 2, 1), (2, 4, 1), (1, 1, 1)]
+
+    # Ordered by Total Warps (Div_M * Div_N * Div_K)
+    # Index 0 is least parallelism (1 warp), Index -1 is max parallelism
+    WARP_DIVISORS = [
+        (1, 1, 1),       # 1 Warp
+        (2, 1, 1),       # 2 Warps 
+        (1, 2, 1),       # 2 Warps
+        (2, 2, 1),       # 4 Warps
+        (4, 2, 1),       # 8 Warps
+        (2, 4, 1)        # 8 Warps
+    ]
+
     STAGES_LIST = [2, 3, 4, 5]
+    
+    # For Swizzle, we treat Identity < SplitK as a "mode switch"
+    # and SwizzleN as an intensity parameter
     SWIZZLE_FUNCS = [SwizzlePolicy.Identity, SwizzlePolicy.SplitK]
     SWIZZLE_N_VALUES = [1, 2, 4] 
 
     def __init__(self, input_queue: mp.Queue, output_queue: mp.Queue, dim_m: int, dim_n: int, dim_k: int, bar_size: int = 10):
-        self.input_queue = input_queue   # Queue to send configs to Compiler
-        self.output_queue = output_queue # Queue to receive results from Runner
+        self.input_queue = input_queue
+        self.output_queue = output_queue
         self.dim_m = dim_m
         self.dim_n = dim_n  
         self.dim_k = dim_k
         self.bar_size = bar_size
         
         self.best_config: Optional[KernelConfig] = None
-        self.best_perf: Optional[KernelPerformance] = None # Store performance metrics of best config
+        self.best_perf: Optional[KernelPerformance] = None 
         self.best_tflop: float = 0.0
         self.visited_configs: Set[str] = set()
+
+        # Initialize the Composible Policy Engine
+        self.policy_engine = get_default_policy()
 
     def get_random_config(self) -> KernelConfig:
         while True:
@@ -107,108 +101,150 @@ class CutlassAutotunerParallel:
             return False
         return True
 
+    def get_config_indices(self, config: KernelConfig) -> dict:
+        """Helper to recover the indices of a given config in the search lists."""
+        indices = {}
+        
+        # Tile Index
+        try:
+            indices['TB_TILE'] = self.TB_TILES.index((config.TB_M, config.TB_N, config.TB_K))
+        except ValueError:
+            indices['TB_TILE'] = 0
+
+        # Warp Divisor Index
+        # We have to reverse calculate divisors because config stores absolute W_M
+        div_m, div_n, div_k = config.TB_M // config.W_M, config.TB_N // config.W_N, config.TB_K // config.W_K
+        try:
+            indices['WARP_DIV'] = self.WARP_DIVISORS.index((div_m, div_n, div_k))
+        except ValueError:
+            indices['WARP_DIV'] = 0
+
+        # Stages
+        try:
+            indices['STAGES'] = self.STAGES_LIST.index(config.stages)
+        except ValueError:
+            indices['STAGES'] = 0
+            
+        # Swizzle N
+        try:
+            indices['SWIZZLE_N'] = self.SWIZZLE_N_VALUES.index(config.SwizzleN)
+        except ValueError:
+            indices['SWIZZLE_N'] = 0
+
+        return indices
+
+    def get_neighbor_config(self, base: KernelConfig, param: str, direction: int) -> Optional[KernelConfig]:
+        """
+        Structural mutation: Moves adjacent in the search lists.
+        param: matches ActionType (TB_TILE, WARP_DIV, STAGES, SWIZZLE_N, SWIZZLE_POLICY, RANDOM_WARP)
+        direction: +1 (Increase), -1 (Decrease), or 0 (Special/Toggle)
+        """
+        indices = self.get_config_indices(base)
+        
+        # Start with copy of parameters
+        tb_m, tb_n, tb_k = base.TB_M, base.TB_N, base.TB_K
+        w_m, w_n, w_k = base.W_M, base.W_N, base.W_K
+        stages = base.stages
+        swizzle = base.swizzle_policy
+        swizzle_n = base.SwizzleN
+
+        # --- Handle Params ---
+        
+        if param == ActionType.TB_TILE:
+            current_idx = indices['TB_TILE']
+            new_idx = current_idx + direction
+            if 0 <= new_idx < len(self.TB_TILES):
+                tb_m, tb_n, tb_k = self.TB_TILES[new_idx]
+                # Recalculate Warp using old divisors
+                old_div_idx = indices['WARP_DIV']
+                d_m, d_n, d_k = self.WARP_DIVISORS[old_div_idx]
+                w_m, w_n, w_k = tb_m // d_m, tb_n // d_n, tb_k // d_k
+            else:
+                return None
+
+        elif param == ActionType.STAGES:
+            current_idx = indices['STAGES']
+            new_idx = current_idx + direction
+            if 0 <= new_idx < len(self.STAGES_LIST):
+                stages = self.STAGES_LIST[new_idx]
+            else:
+                return None
+
+        elif param == ActionType.WARP_DIV:
+            current_idx = indices['WARP_DIV']
+            new_idx = current_idx + direction
+            if 0 <= new_idx < len(self.WARP_DIVISORS):
+                d_m, d_n, d_k = self.WARP_DIVISORS[new_idx]
+                w_m, w_n, w_k = tb_m // d_m, tb_n // d_n, tb_k // d_k
+            else:
+                return None
+
+        elif param == ActionType.SWIZZLE_N:
+            current_idx = indices['SWIZZLE_N']
+            new_idx = current_idx + direction
+            if 0 <= new_idx < len(self.SWIZZLE_N_VALUES):
+                swizzle_n = self.SWIZZLE_N_VALUES[new_idx]
+            else:
+                return None
+
+        elif param == ActionType.SWIZZLE_POLICY:
+            # Toggle between Identity and SplitK
+            if swizzle == SwizzlePolicy.Identity:
+                swizzle = SwizzlePolicy.SplitK
+            else:
+                swizzle = SwizzlePolicy.Identity
+
+        elif param == ActionType.RANDOM_WARP:
+            # Pick a random warp divisor different from current
+            current_idx = indices['WARP_DIV']
+            choices = [i for i in range(len(self.WARP_DIVISORS)) if i != current_idx]
+            if not choices: return None
+            new_idx = random.choice(choices)
+            d_m, d_n, d_k = self.WARP_DIVISORS[new_idx]
+            w_m, w_n, w_k = tb_m // d_m, tb_n // d_n, tb_k // d_k
+
+        else:
+            return None
+
+        # --- Validate ---
+        if not self._is_valid(tb_m, tb_n, tb_k, w_m, w_n, w_k):
+            return None
+
+        return KernelConfig(
+            TB_M=tb_m, TB_N=tb_n, TB_K=tb_k,
+            W_M=w_m, W_N=w_n, W_K=w_k,
+            INST_M=base.INST_M, INST_N=base.INST_N, INST_K=base.INST_K,
+            stages=stages,
+            swizzle_policy=swizzle,
+            SwizzleN=swizzle_n
+        )
+
     def get_heuristic_config(self) -> Optional[KernelConfig]:
         """
-        Generates a neighbor configuration based on the performance characteristics 
-        of the current best configuration.
+        Uses the Policy Engine to suggest the next configuration.
         """
         if self.best_config is None or self.best_perf is None:
             return None
         
-        # 1. Analyze Bottleneck
-        perf = self.best_perf
-        action = "explore" 
-
-        # Heuristic Thresholds
-        HIGH_REG_PRESSURE = 230 # Close to limit of 255
-        HIGH_MEM_UTIL = 80.0
-        HIGH_SM_UTIL = 80.0
+        # 1. Ask Policy Engine for an Action
+        action = self.policy_engine.evaluate(self.best_perf)
         
-        if perf.reg_per_thread > HIGH_REG_PRESSURE:
-            # Bottleneck: Occupancy limited by registers
-            action = "reduce_usage"
-        elif perf.dram_throughput_pct > HIGH_MEM_UTIL or (perf.mem_throughput_pct > perf.sm__pct + 15.0):
-            # Bottleneck: Memory Bandwidth
-            action = "increase_reuse"
-        elif perf.sm__pct > HIGH_SM_UTIL or (perf.sm__pct > perf.mem_throughput_pct + 15.0):
-            # Bottleneck: Compute (or stuck on latency)
-            action = "increase_work"
-        else:
-            action = "random_mutate"
-
-        # 2. Mutate based on Action
-        # Create a deep copy to modify
-        base = self.best_config
+        if action:
+            # 2. Try to apply the action
+            print(f"[LOG] [AUTOTUNER] Policy Triggered: {action}", file=sys.stderr)
+            neighbor = self.get_neighbor_config(self.best_config, action.param, action.direction)
+            if neighbor:
+                return neighbor
+            else:
+                print(f"[LOG] [AUTOTUNER] Policy action failed (boundary or invalid). Fallback to random.", file=sys.stderr)
         
-        # Helper to get current TB index
-        current_tb = (base.TB_M, base.TB_N, base.TB_K)
-        try:
-            tb_idx = self.TB_TILES.index(current_tb)
-        except ValueError:
-            tb_idx = 0
-
-        # Attempt to generate a valid neighbor multiple times
-        for _ in range(10): 
-            new_tb_idx = tb_idx
-            new_stages = base.stages
-            
-            mutation_choice = random.random()
-
-            if action == "reduce_usage":
-                # Strategy: Smaller Tiles OR Fewer Stages
-                if mutation_choice < 0.6:
-                    new_tb_idx = max(0, tb_idx - 1)
-                else:
-                    new_stages = max(min(self.STAGES_LIST), base.stages - 1)
-            
-            elif action == "increase_reuse":
-                # Strategy: Larger Tiles OR More Stages (hide latency)
-                if mutation_choice < 0.6:
-                    new_tb_idx = min(len(self.TB_TILES) - 1, tb_idx + 1)
-                else:
-                    new_stages = min(max(self.STAGES_LIST), base.stages + 1)
-
-            elif action == "increase_work":
-                # Strategy: Larger Tiles (efficiency) or change Warp/Swizzle
-                if mutation_choice < 0.5:
-                    new_tb_idx = min(len(self.TB_TILES) - 1, tb_idx + 1)
-                # Note: Swizzle/Warp changes handled implicitly by reconstruction logic below if we don't change TB/Stages
-            
-            # Fallback / Random pertubation (always a small chance)
-            if random.random() < 0.2:
-                if random.random() < 0.5:
-                    new_stages = random.choice(self.STAGES_LIST)
-                else:
-                    new_tb_idx = random.randint(0, len(self.TB_TILES)-1)
-
-            # Reconstruct Config
-            tb_m, tb_n, tb_k = self.TB_TILES[new_tb_idx]
-            
-            # Keep warp divisor if possible, else pick random
-            w_div_m, w_div_n, w_div_k = random.choice(self.WARP_DIVISORS)
-            
-            w_m = tb_m // w_div_m
-            w_n = tb_n // w_div_n
-            w_k = tb_k // w_div_k
-            
-            if self._is_valid(tb_m, tb_n, tb_k, w_m, w_n, w_k):
-                # Swizzle mutation
-                swizzle = base.swizzle_policy
-                swizzle_n = base.SwizzleN
-                if random.random() < 0.3:
-                    swizzle = random.choice(self.SWIZZLE_FUNCS)
-                    swizzle_n = random.choice(self.SWIZZLE_N_VALUES)
-
-                return KernelConfig(
-                    TB_M=tb_m, TB_N=tb_n, TB_K=tb_k,
-                    W_M=w_m, W_N=w_n, W_K=w_k,
-                    INST_M=base.INST_M, INST_N=base.INST_N, INST_K=base.INST_K, # Keep instruction shape same usually
-                    stages=new_stages,
-                    swizzle_policy=swizzle,
-                    SwizzleN=swizzle_n
-                )
+        # 3. Fallback: Random Mutation if no policy triggered or action failed
+        # Just pick a random dimension to perturb
+        dims = [ActionType.TB_TILE, ActionType.WARP_DIV, ActionType.STAGES, ActionType.SWIZZLE_N]
+        random_dim = random.choice(dims)
+        random_dir = random.choice([-1, 1])
         
-        return None # Failed to find valid neighbor
+        return self.get_neighbor_config(self.best_config, random_dim, random_dir)
 
     def get_tflop_from_runtime(self, runtime_ms: float) -> float:
         if runtime_ms <= 0: return 0.0
@@ -217,7 +253,7 @@ class CutlassAutotunerParallel:
         return tflops
 
     def tune(self, timeout_s: int):
-        print(f"[LOG] [AUTOTUNER] Starting Bottleneck-Aware Search with bar_size={self.bar_size}...", file=sys.stderr)
+        print(f"[LOG] [AUTOTUNER] Starting Policy-Driven Search with bar_size={self.bar_size}...", file=sys.stderr)
         
         start_time = time.time()
         pending_jobs = 0

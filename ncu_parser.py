@@ -87,7 +87,32 @@ def parse_ncu_log(log_content: str) -> dict:
                     data[current_section][last_msg_type] += " " + stripped_line
 
     return data
-    # return json.dumps(data, indent=4)
+
+class KernelPerformance:
+    def __init__(self, parsed_data: dict):
+        self.parsed_data = parsed_data
+        
+        # Helper to safely extract values with defaults
+        def get_val(section, metric, default=0.0):
+            try:
+                return parsed_data.get(section, {}).get(metric, {}).get('val', default)
+            except:
+                return default
+
+        self.duration_ms: float = get_val('GPU Speed Of Light Throughput', 'Duration')
+        self.mem_throughput_pct: float = get_val('GPU Speed Of Light Throughput', 'Memory Throughput')
+        self.sm__pct: float = get_val('GPU Speed Of Light Throughput', 'Compute (SM) Throughput')
+        self.dram_throughput_pct: float = get_val('GPU Speed Of Light Throughput', 'DRAM Throughput')
+        self.l1_throughput_pct: float = get_val('GPU Speed Of Light Throughput', 'L1/TEX Cache Throughput')
+        self.l2_throughput_pct: float = get_val('GPU Speed Of Light Throughput', 'L2 Cache Throughput')
+        
+        self.ipc: float = get_val('Compute Workload Analysis', 'Executed Ipc Active')
+        
+        self.mem_max_bandwidth: float = get_val('Memory Workload Analysis', 'Max Bandwidth')
+        self.l1_tex_hit_rate_pct: float = get_val('Memory Workload Analysis', 'L1/TEX Hit Rate')
+        self.l2_hit_rate_pct: float = get_val('Memory Workload Analysis', 'L2 Hit Rate')
+        
+        self.reg_per_thread: int = int(get_val('Launch Statistics', 'Registers Per Thread', 0))
 
 import os
 if __name__ == "__main__":
@@ -102,12 +127,10 @@ if __name__ == "__main__":
                 content = f.read()
             
             data = parse_ncu_log(content)
-
             # print(json.dumps(data, indent=4))
-            print(f'#####{data['GPU Speed Of Light Throughput']['Duration']['val']}#####')
             
             with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-                json.dump(json.dumps(data, indent=4), f, indent=4)
+                json.dump(data, f, indent=4) # Fixed bug in original main block
                 
             print(f"Success! JSON data written to {OUTPUT_FILE}")
             
