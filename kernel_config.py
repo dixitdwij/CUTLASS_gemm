@@ -73,7 +73,6 @@ class KernelConfig:
         w_vals = list(map(int, seg_map["W"].split("x")))
         inst_vals = list(map(int, seg_map["INST"].split("x")))
 
-        # SWZ: "SplitK_N2" or "Identity_N1" etc.
         swz_part = seg_map["SWZ"]  # e.g. "SplitK_N2"
         swz_name_str, n_str = swz_part.split("_N")
         swizzle_policy = SwizzlePolicy[swz_name_str]
@@ -96,10 +95,10 @@ class KernelConfig:
         return getattr(self, 'compiled', False)
     
     def get_binary_path(self) -> str:
-        return self.binary_path  # Error catching intended
+        return self.binary_path  
     
     def register_output_file(self, output_file: str) -> None:
         self.output_file = output_file
 
     def get_output_file_path(self) -> str:
-        return self.output_file # Error catching intended
+        return self.output_file 

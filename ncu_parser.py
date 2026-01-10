@@ -3,15 +3,12 @@ import json
 import sys
 
 def parse_ncu_log(log_content: str) -> dict:
-    # Parses the ncu log content and returns json
 
     data = {}
     current_section = None
     
-    # Track last message type (INF or OPT) to handle multi-line messages
     last_msg_type = None 
 
-    # regex section headers 
     section_pattern = re.compile(r"^\s*Section:\s+(.*)")
     
     column_split_pattern = re.compile(r"\s{2,}")
@@ -21,11 +18,9 @@ def parse_ncu_log(log_content: str) -> dict:
     for line in lines:
         stripped_line = line.strip()
         
-        # Emprty line
         if not stripped_line or set(stripped_line) <= set("- "):
             continue
 
-        # New section detect
         section_match = section_pattern.match(line)
         if section_match:
             current_section = section_match.group(1).strip()
@@ -35,17 +30,14 @@ def parse_ncu_log(log_content: str) -> dict:
 
         if current_section:
             
-            # tabel header
             if "Metric Name" in stripped_line and "Metric Unit" in stripped_line:
                 last_msg_type = None
                 continue
 
-            # INF OPT msg
             if stripped_line.startswith("INF") or stripped_line.startswith("OPT"):
                 msg_type = stripped_line[:3] # "INF" or "OPT" hopefully
                 msg_content = stripped_line[3:].strip()
                 
-                # init or append (if multiple distinct blocks exist, concat)
                 if msg_type in data[current_section]:
                     data[current_section][msg_type] += " " + msg_content
                 else:
@@ -54,12 +46,9 @@ def parse_ncu_log(log_content: str) -> dict:
                 last_msg_type = msg_type
                 continue
 
-            # Process Metrics vs Message Continuation
-            # Split line by whitespace gaps
             parts = column_split_pattern.split(stripped_line)
 
             if len(parts) >= 2:
-                # It is likely a Metric row: [Name, Unit, Value] or [Name, Value]
                 last_msg_type = None # Reset msg mode
                 
                 metric_name = parts[0].strip()
@@ -72,7 +61,6 @@ def parse_ncu_log(log_content: str) -> dict:
                     if val.is_integer():
                         val = int(val)
                 except ValueError:
-                    # Keep as string (e.g., "PolicySpread")
                     val = metric_val_str
 
                 data[current_section][metric_name] = {
@@ -81,9 +69,7 @@ def parse_ncu_log(log_content: str) -> dict:
                 }
             
             else:
-                # If doesn't split into columns, it might be a continuation of INF/OPT
                 if last_msg_type and last_msg_type in data[current_section]:
-                    # Append line to prev msg
                     data[current_section][last_msg_type] += " " + stripped_line
 
     return data
@@ -92,7 +78,6 @@ class KernelPerformance:
     def __init__(self, parsed_data: dict):
         self.parsed_data = parsed_data
         
-        # Helper to safely extract values with defaults
         def get_val(section, metric, default=0.0):
             try:
                 return parsed_data.get(section, {}).get(metric, {}).get('val', default)

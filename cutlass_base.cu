@@ -2,7 +2,6 @@
 #include <vector>
 #include <cstdlib>
 
-// CUTLASS Includes
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/device/gemm.h"
 #include "cutlass/util/host_tensor.h"
@@ -28,7 +27,6 @@ int main(int argc, char** argv) {
     std::cout << "Benchmarking GEMM on RTX 5060 Ti (Auto-Tuned)" << std::endl;
     std::cout << "Dimensions: M=" << M << " N=" << N << " K=" << K << std::endl;
 
-    // 1. Data Types
     using ElementInputA = cutlass::half_t;
     using ElementInputB = cutlass::half_t;
     using ElementOutput = cutlass::half_t;
@@ -37,11 +35,6 @@ int main(int argc, char** argv) {
     using LayoutInputB = cutlass::layout::RowMajor;
     using LayoutOutput = cutlass::layout::RowMajor;
 
-    // 2. Define the Kernel
-    // STRATEGY: We switch to 'cutlass::arch::Sm75' (Turing).
-    // This allows CUTLASS to auto-select default shapes (usually 128x64 or 64x64) 
-    // that are guaranteed to fit in the Shared Memory of consumer cards (5060 Ti).
-    // Using 'Sm80' defaults here would crash because they assume A100-class memory (100KB+).
     using Gemm = cutlass::gemm::device::Gemm<
         ElementInputA, LayoutInputA,
         ElementInputB, LayoutInputB,
@@ -51,12 +44,10 @@ int main(int argc, char** argv) {
         cutlass::arch::Sm75             // Safe defaults for Consumer GPUs
     >;
 
-    // 3. Allocate Data
     cutlass::HostTensor<ElementInputA, LayoutInputA> tensor_a({M, K});
     cutlass::HostTensor<ElementInputB, LayoutInputB> tensor_b({K, N});
     cutlass::HostTensor<ElementOutput, LayoutOutput> tensor_c({M, N});
 
-    // 4. Initialize Data
     cutlass::reference::host::TensorFillRandomUniform(tensor_a.host_view(), 1, ElementInputA(2), ElementInputA(-2), 0);
     cutlass::reference::host::TensorFillRandomUniform(tensor_b.host_view(), 1, ElementInputB(2), ElementInputB(-2), 0);
     cutlass::reference::host::TensorFillRandomUniform(tensor_c.host_view(), 1, ElementOutput(2), ElementOutput(-2), 0);
@@ -65,7 +56,6 @@ int main(int argc, char** argv) {
     tensor_b.sync_device();
     tensor_c.sync_device();
 
-    // 5. Arguments
     float alpha = 1.0f;
     float beta = 1.0f; 
 
@@ -80,7 +70,6 @@ int main(int argc, char** argv) {
 
     Gemm gemm_op;
 
-    // 6. Workspace Handling (Always good practice)
     size_t workspace_size = gemm_op.get_workspace_size(arguments);
     void* device_workspace = nullptr;
     if (workspace_size > 0) {
@@ -91,7 +80,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 7. Initialize
     cutlass::Status status = gemm_op.initialize(arguments, device_workspace);
 
     if (status != cutlass::Status::kSuccess) {
@@ -99,7 +87,6 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // 8. Warmup
     for(int i = 0; i < WARMUP_RUNS; ++i) {
         status = gemm_op();
         if(status != cutlass::Status::kSuccess) {
@@ -109,7 +96,6 @@ int main(int argc, char** argv) {
     }
     cudaDeviceSynchronize();
 
-    // 9. Benchmark
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);

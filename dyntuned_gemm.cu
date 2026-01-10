@@ -30,11 +30,9 @@ REQUIRED_MACROS
 
 #undef X
 
-// Run Configuration
 #define WARMUP_RUNS 10
 #define MEASURED_RUNS 10 
 
-// CPU Reference GEMM
 template <typename T>
 void cpu_gemm(int M, int N, int K, T alpha, const T *A, const T *B, T beta, T *C) {
     for (int i = 0; i < M; ++i) {
@@ -52,10 +50,9 @@ void cpu_gemm(int M, int N, int K, T alpha, const T *A, const T *B, T beta, T *C
     }
 }
 
-// Random Initialization
 template <typename T>
 void initialize_tensor(T* data, size_t count, float min = -1.0f, float max = 1.0f) {
-    std::default_random_engine generator(2024); // Fixed seed for reproducibility
+    std::default_random_engine generator(2024);
     std::uniform_real_distribution<float> distribution(min, max);
     for (size_t i = 0; i < count; ++i) {
         data[i] = static_cast<T>(distribution(generator));
@@ -74,7 +71,6 @@ std::ostream& operator<<(std::ostream& os, DataType dtype) {
     return os;
 }
 
-// Core GEMM Kernel
 #define FP_32_TOLERANCE 1e-3
 #define FP_16_TOLERANCE 5e-3
 #define BF_16_TOLERANCE 5e-2
@@ -140,7 +136,6 @@ double run_gemm_core(int m, int n, int k) {
         STAGES
     >;
 
-    // Memory Allocation (Host & Device)
     size_t count_A = size_t(m) * k; 
     size_t count_B = size_t(k) * n; 
     size_t count_C = size_t(m) * n; 
@@ -148,32 +143,25 @@ double run_gemm_core(int m, int n, int k) {
     size_t size_B = count_B * sizeof(ElementType);
     size_t size_C = count_C * sizeof(ElementType);
 
-    // Device pointers
     ElementType *dev_A, *dev_B, *dev_C;
     cudaMalloc(&dev_A, size_A);
     cudaMalloc(&dev_B, size_B);
     cudaMalloc(&dev_C, size_C);
 
-    // Host pointers
     std::vector<ElementType> host_A(count_A);
     std::vector<ElementType> host_B(count_B);
     std::vector<ElementType> host_C(count_C); // Stores GPU result
     std::vector<ElementType> host_Ref(count_C); // Stores CPU Reference
 
-    // Initialization
     initialize_tensor(host_A.data(), count_A);
     initialize_tensor(host_B.data(), count_B);
-    // 0 initialise C
     std::fill(host_C.begin(), host_C.end(), static_cast<ElementType>(0.0f));
     std::fill(host_Ref.begin(), host_Ref.end(), static_cast<ElementType>(0.0f));
 
-    // Copy Host -> Device
     cudaMemcpy(dev_A, host_A.data(), size_A, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_B, host_B.data(), size_B, cudaMemcpyHostToDevice);
     cudaMemset(dev_C, 0, size_C); // Reset device C
 
-    // Setup Arguments
-    // Alpha = 1.0, Beta = 0.0 (Overwrite C)
     typename Gemm::Arguments arguments(
         {m, n, k}, {dev_A, k}, {dev_B, n}, {dev_C, n}, {dev_C, n}, {1.0f, 0.0f}
     );
@@ -188,11 +176,9 @@ double run_gemm_core(int m, int n, int k) {
         exit(1);
     }
 
-    // Performance measurement
     cudaEvent_t start, stop;
     cudaEventCreate(&start); cudaEventCreate(&stop);
 
-    // Warmup
     for(int i=0; i<WARMUP_RUNS; ++i) {
         cutlass::Status status = gemm_op(arguments, ws);
         if (status != cutlass::Status::kSuccess) {
@@ -203,7 +189,6 @@ double run_gemm_core(int m, int n, int k) {
     }
     cudaDeviceSynchronize();
 
-    // Measurement
     cudaEventRecord(start);
     for(int i=0; i<MEASURED_RUNS; ++i) {
         cutlass::Status status = gemm_op(arguments, ws);
@@ -234,28 +219,24 @@ double run_gemm_core(int m, int n, int k) {
               << "TFLOPs: " << tflops << std::endl;
     std::cout << "==========================================\n";
 
-    // Verification
     #ifdef VERIFY 
         std::cout << "  [Verify] Running CPU reference check... ";
         std::cout.flush();
         
-        // Copy GPU result -> Host
         cudaMemcpy(host_C.data(), dev_C, size_C, cudaMemcpyDeviceToHost);
 
-        // Calculate CPU Reference
         cpu_gemm(m, n, k, 
                  static_cast<ElementType>(1.0f), 
                  host_A.data(), host_B.data(), 
                  static_cast<ElementType>(0.0f), 
                  host_Ref.data());
 
-        // Compare
         double max_err = 0.0;
         for (size_t i = 0; i < count_C; ++i) {
             float gpu_val = static_cast<float>(host_C[i]);
             float ref_val = static_cast<float>(host_Ref[i]);
             float diff = std::abs(gpu_val - ref_val);
-            float rel_err = diff / (std::abs(ref_val) + 0.0001f); // Avoid div by zero
+            float rel_err = diff / (std::abs(ref_val) + 0.0001f); 
             if (rel_err > max_err) max_err = rel_err;
         }
 

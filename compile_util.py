@@ -4,14 +4,12 @@ import subprocess
 import sys
 
 
-# Glabal variables (check setup)
 _source_file: str = "dyntuned_gemm.cu"
 _bin_path: str = "bin/"
 _dtype_str: str|None = None
 
 
 def _init_worker(source_file: str, bin_path: str, dtype_str: str) -> None:
-    # TODO: Cehck if thisis reqd as global vars are set by the manager before spawning pool
     global _source_file
     global _bin_path
     global _dtype_str
@@ -41,7 +39,7 @@ def compilation_worker(config: KernelConfig) -> KernelConfig:
         return config
     except subprocess.CalledProcessError as e:
         print(f"[ERROR] [COMPILER] Compilation failed for kernel: {config.kernel_id()}", file=sys.stderr)
-        print(f"[ERROR] [COMPILER] {e.stderr}")   # use e.output.decode("utf-8") if isinstance(e.output, bytes) else e.output for full error log
+        print(f"[ERROR] [COMPILER] {e.stderr}")   
         config.register_compilation("", False)
         raise e
     
@@ -69,8 +67,6 @@ def compiler_manager_task(
         output_queue.put(result)
 
     def error_callback(error: BaseException):
-        # error type annotated as BaseException to make linter happy
-        # subprocess.CalledProcessError will only be passed here (not that it matters much)
         print(f"[ERROR] [Compiler Manager] Compilation worker encountered an error: {error}", file=sys.stderr)
 
     with mp.Pool(processes=num_compile_workers, initializer=_init_worker, initargs=(source_file, bin_path, dtype_str)) as pool:

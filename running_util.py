@@ -21,7 +21,6 @@ def _init_worker(dim_m: int, dim_n: int, dim_k: int, dump_path: str) -> None:
     _dump_path = dump_path
 
 
-# Check if returning config every time leads to any issues with wrong entries in queue
 def run_worker(config: KernelConfig) -> KernelConfig:
     binary_path = config.get_binary_path()
     output_file: str = _dump_path + config.kernel_id()

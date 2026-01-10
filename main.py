@@ -37,7 +37,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    # Ensure output directories exist
     if not os.path.exists(args.dump):
         os.makedirs(args.dump, exist_ok=True)
     
@@ -52,7 +51,6 @@ if __name__ == "__main__":
     compile_runner_queue = mp.Queue()
     runner_autotuner_queue = mp.Queue()
 
-    # Compiler Manager
     compiler_proc: mp.Process = mp.Process(
         target=compiler_manager_task,
         args=(
@@ -69,7 +67,6 @@ if __name__ == "__main__":
     compiler_proc.start() 
     print(f"[LOG] [MAIN] Started Compiler Manager with {args.compile_workers} workers", file=sys.stderr)
 
-    # Runner Manager 
     runner_proc: mp.Process = mp.Process(
         target=runner_manager_task,
         args=(
@@ -87,7 +84,6 @@ if __name__ == "__main__":
     runner_proc.start()
     print(f"[LOG] [MAIN] Started Runner Manager with {num_gpus} workers", file=sys.stderr)
     
-    # Autotuner Logic
     autotuner = CutlassAutotunerParallel(
         input_queue=autotuner_compile_queue,
         output_queue=runner_autotuner_queue,
@@ -97,7 +93,6 @@ if __name__ == "__main__":
         bar_size=args.bar_size
     )
 
-    # Start Tuning
     print(f"[LOG] [MAIN] Starting autotuning loop. Budget: {args.time}s, Bar Size: {args.bar_size}", file=sys.stderr)
     try:
         autotuner.tune(timeout_s=args.time)
@@ -106,20 +101,15 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n[ERROR] [MAIN] Critical exception: {e}", file=sys.stderr)
 
-    # Cleanup
     print("[LOG] [MAIN] Cleaning up processes...", file=sys.stderr)
 
-    # The compiler manager logic breaks its loop when it receives None
     autotuner_compile_queue.put(None)
     
-    # Wait for compiler to drain and close
     compiler_proc.join(timeout=10)
     if compiler_proc.is_alive():
         print("[LOG] [MAIN] Compiler Manager did not exit gracefully, terminating...", file=sys.stderr)
         compiler_proc.terminate()
 
-    # Now that compiler is closed we can send the stop signal to the runner
-    # (usually runner gets input from compiler, so we inject the None into that queue)
     compile_runner_queue.put(None)
     
     runner_proc.join(timeout=10)

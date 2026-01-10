@@ -17,6 +17,6 @@
 #     -o cublass_gemm$(python3-config --extension-suffix)
 echo "[SBATCH] Cublas baseline set up"
 
-python3 main.py --m 8192 --n 8192 --k 256 --dtype=BF_16 --source dyntuned_gemm.cu --binary bin/dyntuned_gemm --dump dump/ --compile-workers 2 --time 720
+python3 main.py --m 16384 --n 16384 --k 16384 --dtype=FP_16 --source dyntuned_gemm.cu --binary bin/dyntuned_gemm --dump dump/ --compile-workers 2 --time 1200
 
 echo "[SBATCH] Run completed"

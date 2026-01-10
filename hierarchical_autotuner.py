@@ -9,13 +9,10 @@ class HierarchicalAutotuner(CutlassAutotunerParallel):
     def tune(self, timeout_s: int):
         print(f"[LOG] [AUTOTUNER] Starting Hierarchical Search...", file=sys.stderr)
         
-        # --- PHASE 1: Coarse Search (Find Best Tile) ---
         print(f"[LOG] [AUTOTUNER] Phase 1: Testing all Tile Shapes...", file=sys.stderr)
         
-        # Generate candidates: All Tiles, Fixed Stages=3, Fixed Swizzle=Identity
         phase_1_configs = []
         for tb in self.TB_TILES:
-            # Default Warp calc
             w_m, w_n, w_k = tb[0]//2, tb[1]//2, tb[2] 
             
             cfg = KernelConfig(
@@ -28,12 +25,10 @@ class HierarchicalAutotuner(CutlassAutotunerParallel):
             )
             phase_1_configs.append(cfg)
 
-        # Enqueue all Phase 1
         for cfg in phase_1_configs:
             self.input_queue.put(cfg)
             self.visited_configs.add(cfg.kernel_id())
 
-        # Wait for Phase 1 to complete
         pending = len(phase_1_configs)
         best_tile_config = None
         best_phase1_tflop = 0.0
@@ -46,7 +41,6 @@ class HierarchicalAutotuner(CutlassAutotunerParallel):
                 res = self.output_queue.get(timeout=1.0)
                 pending -= 1
                 
-                # Parse result (simplified logic from your original loop)
                 output_path = res.get_output_file_path()
                 if output_path and os.path.exists(output_path):
                     with open(output_path, 'r', encoding='utf-8') as f:
@@ -64,15 +58,12 @@ class HierarchicalAutotuner(CutlassAutotunerParallel):
             print("[ERROR] Phase 1 failed to find any valid config.", file=sys.stderr)
             return
 
-        # --- PHASE 2: Fine Tuning (Stages & Swizzle) ---
         print(f"[LOG] [AUTOTUNER] Phase 2: Refiming Best Tile {best_tile_config.kernel_id()}...", file=sys.stderr)
         
         phase_2_configs = []
-        # Use the WINNING Tile Shape
         tb_m, tb_n, tb_k = best_tile_config.TB_M, best_tile_config.TB_N, best_tile_config.TB_K
         w_m, w_n, w_k = best_tile_config.W_M, best_tile_config.W_N, best_tile_config.W_K
 
-        # Exhaustive search of Stages and Swizzle for this specific tile
         for stages in self.STAGES_LIST:
             for swizzle in self.SWIZZLE_FUNCS:
                 for swiz_n in self.SWIZZLE_N_VALUES:
@@ -87,9 +78,5 @@ class HierarchicalAutotuner(CutlassAutotunerParallel):
                     if cfg.kernel_id() not in self.visited_configs:
                         phase_2_configs.append(cfg)
         
-        # Run Phase 2
         for cfg in phase_2_configs:
             self.input_queue.put(cfg)
-        
-        # Standard wait loop for Phase 2 results...
-        # (You can reuse the generic result loop here)
